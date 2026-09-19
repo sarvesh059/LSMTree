@@ -4,6 +4,7 @@ import compactation.CompactStrategyImpl.FullCompactStrategy;
 import compactation.MergeStrategyImpl.FullLoadMergeStrategy;
 import core.Value;
 import core.key.KeyCodecImpl.IntegerKeyCodec;
+import cursor.EntrySource;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -16,8 +17,10 @@ import java.util.Random;
  * compared across successive T7 enhancements over time. Re-run after each T7 task lands and
  * diff against the previous run's numbers in docs/benchmark.md.
  *
- * Workload E (short-range scans) is intentionally omitted -- this project has no range-scan
- * operation until T7.2 lands. Add it here once T7.2 exists.
+ * Workload E (short-range scans) uses a Zipfian-distributed start key and a uniformly random
+ * scan length, same as YCSB's default -- adapted to this project's scan(low, high) key-range API
+ * by treating the range as [start, start + length - 1] against this benchmark's dense integer
+ * keyspace, rather than YCSB's own start-key-plus-record-count cursor shape.
  *
  * Standalone program, not JUnit -- compile/run the same way as the rest of the project:
  *   javac -d out -cp "lib/*" $(find src -name "*.java")
@@ -37,6 +40,7 @@ public class YcsbStyleBenchmark {
         runWorkloadB(keySpace, ops);
         runWorkloadC(keySpace, ops);
         runWorkloadD(keySpace, ops);
+        runWorkloadE(keySpace, ops);
         runWorkloadF(keySpace, ops);
     }
 
@@ -116,6 +120,29 @@ public class YcsbStyleBenchmark {
         }
         tree.close();
         report("Workload D (95% read-latest / 5% insert)", latencies);
+    }
+
+    // ---------- Workload E: short-range scans, Zipfian start key, uniform scan length ----------
+    static final int MAX_SCAN_LENGTH = 100; // YCSB's default is 1000; scaled down for this benchmark's keySpace
+
+    static void runWorkloadE(int keySpace, int ops) throws Exception {
+        LSMTree<Integer> tree = freshTree("ycsb-e");
+        load(tree, keySpace);
+        ZipfianGenerator zipf = new ZipfianGenerator(keySpace, THETA, RNG);
+
+        long[] latencies = new long[ops];
+        for (int i = 0; i < ops; i++) {
+            int low = (int) zipf.next();
+            int scanLength = 1 + RNG.nextInt(MAX_SCAN_LENGTH);
+            int high = low + scanLength - 1;
+            long t0 = System.nanoTime();
+            try (EntrySource<Integer> cursor = tree.scan(low, high)) {
+                while (cursor.hasNext()) cursor.next();
+            }
+            latencies[i] = System.nanoTime() - t0;
+        }
+        tree.close();
+        report("Workload E (short-range scans, Zipfian start, 1-" + MAX_SCAN_LENGTH + " length)", latencies);
     }
 
     // ---------- Workload F: read-modify-write, 50% read / 50% read-then-write, Zipfian ----------

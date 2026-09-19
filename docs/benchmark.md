@@ -309,3 +309,68 @@ Same as before — single-process wall-clock timing, one machine, two runs for s
 warmup control. `LSMTree<Integer>` only, `IntegerKeyCodec`'s cheap 4-byte encode keeps hashing
 cost low; a `String`-keyed run would show a different (likely still positive, but different
 magnitude) balance between filter-hashing cost and I/O saved.
+
+---
+
+## 8. Post-T7.2 (range scan) — Workload E added
+
+T7.2 added `LSMTree.scan(low, high)`, so Workload E (short-range scans), previously skipped for
+having nothing to test, is now in the harness. It adapts YCSB's usual "start key + record count"
+scan shape to this project's key-range API: a Zipfian-distributed start key, then a uniformly
+random scan length in `[1, 100]` (YCSB's own default is 1000; scaled down here), translated to
+`scan(start, start + length - 1)` against this benchmark's dense integer keyspace. Each op fully
+drains the returned `EntrySource` — an unread cursor wouldn't reflect real work.
+
+A/B/C/D/F are included again as a regression check — `scan()` is a purely additive read path, so
+these should be unchanged from section 7's post-T7.1 numbers.
+
+### Results (two runs)
+
+```
+Run 1:
+Workload A: ops/sec=4571  avg=218.8us  p50=23.2us  p99=135.4us
+Workload B: ops/sec=19471 avg=51.4us   p50=31.8us  p99=114.2us
+Workload C: ops/sec=28162 avg=35.5us   p50=32.7us  p99=70.2us
+Workload D: ops/sec=21700 avg=46.1us   p50=27.4us  p99=74.9us
+Workload E: ops/sec=4056  avg=246.5us  p50=245.2us p99=406.3us  max=3340.1us
+Workload F: ops/sec=4271  avg=234.1us  p50=46.5us  p99=167.2us
+
+Run 2 (confirmation):
+Workload A: ops/sec=4610  avg=216.9us  p50=21.8us  p99=134.8us
+Workload B: ops/sec=19258 avg=51.9us   p50=32.0us  p99=113.8us
+Workload C: ops/sec=27727 avg=36.1us   p50=33.0us  p99=72.1us
+Workload D: ops/sec=21103 avg=47.4us   p50=28.0us  p99=77.9us
+Workload E: ops/sec=4035  avg=247.8us  p50=245.8us p99=410.4us  max=3088.8us
+Workload F: ops/sec=4229  avg=236.5us  p50=47.3us  p99=164.6us
+```
+
+### Findings
+
+- **A/B/C/D/F are unchanged from section 7** (within normal run-to-run noise, a few percent at
+  most) — confirms `scan()` didn't regress the existing read/write paths, as expected for an
+  additive feature.
+- **Workload E's per-op latency is naturally much higher than a point lookup** (avg ~247us,
+  p50 ~245us vs. Workload C's ~36us) — expected, since each "op" here is an entire scan, not a
+  single key. Average scan length is ~50 entries (uniform 1-100), so ~247us for ~50 entries works
+  out to roughly ~5us/entry, plausible given each entry crosses the heap-merge (`MergeCursor`'s
+  `PriorityQueue`, O(log(segment count)) per pop/push) on top of the underlying file reads.
+- **No compaction-stall tail.** Workload E's max (~3.1-3.3ms) is orders of magnitude below A/B/D/F's
+  ~330-345ms max (the known synchronous-compaction stall from section 5, still unfixed pending
+  T7.6). Workload E issues zero writes, so compaction never triggers during the timed portion —
+  same reasoning as Workload C's flat profile, and further confirmation the stall is specifically
+  write-triggered, not something scanning also suffers from.
+- **Streaming a range looks meaningfully cheaper than the equivalent number of point lookups**,
+  by rough estimate: ~50 independent `get()` calls at Workload C's ~36us average would cost
+  ~1.8ms, against Workload E's measured ~247us average for a similarly-sized scan — roughly 7x
+  cheaper. This isn't a direct, controlled comparison (different code paths, different call
+  patterns), so treat it as a plausibility estimate rather than a precise multiplier, but it's the
+  expected shape: a streaming scan pays each segment's seek-to-floor cost once and then walks
+  forward, instead of every point lookup separately re-running bloom-filter checks, index floor
+  lookups, and file opens from scratch.
+
+### Caveats
+
+Same as before — single-process wall-clock timing, one machine, two runs for stability, no JMH
+warmup control. `MAX_SCAN_LENGTH=100` and `keySpace=50,000` are this harness's choices; a
+workload with longer scans or a larger/sparser keyspace would shift Workload E's absolute numbers
+(though not the qualitative "range scan write-quiescent" conclusion).
