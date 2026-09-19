@@ -9,7 +9,6 @@ import core.key.KeyCodec;
 
 import java.io.File;
 import java.io.IOException;
-import java.io.RandomAccessFile;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -24,7 +23,7 @@ public class FullLoadMergeStrategy<K extends Comparable<K>> implements MergeStra
     public Segment<K> merge(List<Segment<K>> segments, File dataFile, File indexFile, File bloomFilterFile, int sampleEvery) throws IOException {
         List<List<Entry<K, Value>>> entriesList = new ArrayList<>();
 
-        SSTable<K> table = new SSTable<K>(this.codec);
+        SSTable<K> table = new SSTable<>(this.codec);
 
         for(Segment<K> segment: segments){
             List<Entry<K, Value>> entries = table.readAll(segment.getDataFile());
