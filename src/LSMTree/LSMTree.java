@@ -40,12 +40,12 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
     private final Path dataDir;
     private final WAL<K> wal;
     private final SSTable<K> ssTable;
-    private final List<Segment<K>> segments;
+    private volatile List<Segment<K>> segments;
     private final int memTableThreshold;
     private final int indexSampleRate;
     private final CompactionStrategy<K> compactionStrategy;
     private final MergeStrategy<K> mergeStrategy;
-    private MemTable<K> memTable;
+    private volatile MemTable<K> memTable;
     private final AtomicLong eventCounter;
     private long getCallCount = 0;
     private long segmentsConsultedCount = 0;
@@ -68,7 +68,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         this.cleanUp();
     }
 
-    public void flush() throws IOException {
+    synchronized void flush() throws IOException {
         if (memTable.getSizeInBytes() == 0) return;
 
         List<Entry<K, Value>> memTableEntries = memTable.entries();
@@ -84,7 +84,9 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         Segment<K> segment = this.ssTable.write(memTableEntries, dataFile, indexFile, bloomFilterFile, this.indexSampleRate);
         Manifest.append(dataFileName, manifestFile());
 
-        this.segments.add(segment);
+        List<Segment<K>> newSegmentList = new ArrayList<>(this.segments);
+        newSegmentList.add(segment);
+        this.segments = newSegmentList;
 
         this.wal.reset();
         this.memTable = new MemTable<>(this.memTableThreshold);
@@ -92,7 +94,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         if (this.compactionStrategy.shouldCompact(this.segments)) compact();
     }
 
-    public void put(K key, Value value) throws IOException {
+    public synchronized void put(K key, Value value) throws IOException {
         Value valueWithId = Value.withId(this.eventCounter.incrementAndGet(), value);
         this.wal.append(key, valueWithId);
         this.wal.fsync();
@@ -103,15 +105,20 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
 
     public Value get(K key) throws IOException {
         this.getCallCount++;
-        Value value = this.memTable.get(key);
+
+        Value value = null;
+        synchronized (this){
+            value = this.memTable.get(key);
+        }
         if (value != null) return value;
 
-        int segmentsCount = this.segments.size();
+        List<Segment<K>> segmentsSnapshot = this.segments;
+        int segmentsCount = segmentsSnapshot.size();
         byte[] encodedKey = this.codec.encodeKey(key);
         long maxEventId = -1L;
         Value resultValue = null;
         for (int i = segmentsCount - 1; i >= 0; i--) {
-            Segment<K> segment = this.segments.get(i);
+            Segment<K> segment = segmentsSnapshot.get(i);
             if(!segment.getBloomFilter().mightContain(encodedKey)) continue;;
             this.segmentsConsultedCount++;
             Value segmentValue = this.ssTable.get(key, segment.getDataFile(), segment.getLoadedIndex());
@@ -167,7 +174,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         Manifest.rewrite(dataFileNames, this.dataDir.resolve(MANIFEST_FILE_NAME).toFile());
     }
 
-    public void compact() throws IOException {
+    synchronized void compact() throws IOException {
         File manifestFile = manifestFile();
         List<Segment<K>> selectedSegments = this.compactionStrategy.select(this.segments);
         String uuid = UUID.randomUUID().toString();
@@ -185,8 +192,10 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         Segment<K> wipSegment = this.mergeStrategy.merge(selectedSegments, wipDataFile, indexFile, bloomFilterFile, this.indexSampleRate);
         Files.move(wipDataFile.toPath(), dataFile.toPath(), StandardCopyOption.ATOMIC_MOVE);
 
-        this.segments.add(new Segment<>(dataFile, wipSegment.getLoadedIndex(), wipSegment.getBloomFilter(), wipSegment.getEntryCount(), wipSegment.getMaxEventId()));
-        this.segments.removeAll(selectedSegments);
+        List<Segment<K>> newSegmentList = new ArrayList<>(this.segments);
+        newSegmentList.removeAll(selectedSegments);
+        newSegmentList.add(new Segment<>(dataFile, wipSegment.getLoadedIndex(), wipSegment.getBloomFilter(), wipSegment.getEntryCount(), wipSegment.getMaxEventId()));
+        this.segments = newSegmentList;
         Manifest.append(dataFileName, manifestFile);
 
         for (Segment<K> segment : selectedSegments) {

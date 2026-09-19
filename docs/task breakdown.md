@@ -129,6 +129,24 @@ exist to have something to measure, and should reflect the final, concurrent-saf
 - [ ] **T7.4 Micro-benchmarks.** AC: report write throughput, point-read latency, and the
       effect of compaction / bloom filters on read cost.
 
+## Side Quests (optional, not required by any phase's AC)
+
+- [ ] **Leveled compaction strategy.** T7.3's AC was satisfied by size-tiered ("pick any"); this
+      is bonus scope, not required. Deliberately deferred until after T7.6 — building it first
+      would mean designing its range-overlap-aware trigger/select logic under single-threaded
+      assumptions, then needing to revisit it for concurrency safety once T7.6 lands: the exact
+      "redone after each subsequent feature" problem T7.6's own placement already exists to avoid.
+      Known building blocks, not yet a committed scope — decide the actual shape (minimal
+      `List<Segment<K>>`-widening vs. the fuller decoupled merge/write-strategy split; L0/L1-only
+      vs. full N-level) when this is actually picked up, not now: `MergeStrategy.merge()`'s return
+      type likely needs to widen to `List<Segment<K>>` (existing strategies would return a
+      singleton list); `Segment` likely needs `level` and `minKey`/`maxKey` fields, persisted in
+      the segment's own header (same principle as `maxEventId` — not duplicated into the
+      manifest); a `LeveledCompactionStrategy` for trigger/select (L0 segments overlap freely;
+      L1+ enforce non-overlap; selection via range-overlap checks using `compareEncoded`); a
+      `LeveledMergeStrategy` that reuses the existing merge machinery but partitions its output
+      into multiple segments instead of writing one.
+
 ---
 
 ### When you want a review
