@@ -47,6 +47,8 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
     private final MergeStrategy<K> mergeStrategy;
     private MemTable<K> memTable;
     private final AtomicLong eventCounter;
+    private long getCallCount = 0;
+    private long segmentsConsultedCount = 0;
 
     public LSMTree(KeyCodec<K> codec, Path dataDir, int indexSampleRate, int memTableThreshold, CompactionStrategy<K> compactionStrategy, MergeStrategy<K> mergeStrategy) throws IOException {
         Files.createDirectories(dataDir);
@@ -100,6 +102,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
     }
 
     public Value get(K key) throws IOException {
+        this.getCallCount++;
         Value value = this.memTable.get(key);
         if (value != null) return value;
 
@@ -110,6 +113,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         for (int i = segmentsCount - 1; i >= 0; i--) {
             Segment<K> segment = this.segments.get(i);
             if(!segment.getBloomFilter().mightContain(encodedKey)) continue;;
+            this.segmentsConsultedCount++;
             Value segmentValue = this.ssTable.get(key, segment.getDataFile(), segment.getLoadedIndex());
             if(segmentValue != null && segmentValue.getId() > maxEventId){
                 maxEventId = segmentValue.getId();
@@ -218,6 +222,14 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
 
     List<Segment<K>> segments() {
         return this.segments;
+    }
+
+    long getCallCount() {
+        return this.getCallCount;
+    }
+
+    long segmentsConsultedCount() {
+        return this.segmentsConsultedCount;
     }
 
     File walFile() {

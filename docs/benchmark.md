@@ -374,3 +374,85 @@ Same as before — single-process wall-clock timing, one machine, two runs for s
 warmup control. `MAX_SCAN_LENGTH=100` and `keySpace=50,000` are this harness's choices; a
 workload with longer scans or a larger/sparser keyspace would shift Workload E's absolute numbers
 (though not the qualitative "range scan write-quiescent" conclusion).
+
+---
+
+## 9. T7.3 (size-tiered compaction) — write/read/space amplification
+
+T7.3's AC is different in kind from the throughput/latency benchmarks above — it asks to
+characterize a compaction strategy's write- vs. read/space-amplification trade-off, not measure
+ops/sec. New harness: `bench/LSMTree/CompactionAmplificationBenchmark.java`, purely byte- and
+call-counting, no wall-clock timing at all, and therefore fully deterministic (same seed, same
+operation sequence, identical output on every run — verified by running it twice).
+
+The workload is the same shape as Workload A elsewhere in this document: `keySpace=50,000`
+sequential-key load, then 20,000 ops of 50% Zipfian-distributed reads / 50% Zipfian-distributed
+updates (`theta=0.99`), `memTableThreshold=8192`. `FullCompactStrategy(10)` and
+`SizeTieredCompactStrategy(minSegmentsPerTier=4, bucketLow=0.5, bucketHigh=1.5)` run the
+*identical* seeded sequence of puts/gets/values (same `Random(42)`, consumed in the same order
+regardless of which segment happens to exist at that moment), so the two strategies are directly
+comparable, not just similar.
+
+Definitions used:
+- **Write amplification** = total bytes written to disk (every flush's output + every
+  compaction's output, summed by listing every `dataFile-*` file present at the end of the run —
+  this project never physically deletes superseded segment files, so nothing is missed) ÷ total
+  bytes the client actually `put()`. WAL bytes are deliberately excluded — WAL behavior is
+  identical regardless of compaction strategy, so including it would only dilute the number that
+  actually reflects what's being compared.
+- **Space amplification** = total live segment bytes (`tree.segments()`, summed) ÷ the true
+  fully-deduplicated size, measured by force-merging all currently-live segments via
+  `FullLoadMergeStrategy` into a throwaway temp file (independent of whichever strategy is under
+  test, since `SizeTieredCompactStrategy.select()` only ever returns one bucket, not everything).
+- **Read amplification** = average segments actually consulted per `get()`
+  (`segmentsConsultedCount() / getCallCount()`, two counters added directly to `LSMTree.get()`'s
+  existing loop — see the discussion in this session on why an external wrapper duplicating the
+  bloom-filter-check logic was rejected in favor of instrumenting the real call site).
+
+### Results (two runs, byte-identical both times)
+
+```
+FullCompactStrategy
+  writeAmp=44.60x  (writtenBytes=302558778, putBytes=6783164)
+  spaceAmp=1.00x   (liveBytes=5858565, logicalBytes=5850012)
+  readAmp=1.312 segments/get  (segmentsConsulted=13085, getCalls=9972)
+
+SizeTieredCompactStrategy
+  writeAmp=4.50x   (writtenBytes=30508359, putBytes=6783164)
+  spaceAmp=1.10x   (liveBytes=6434079, logicalBytes=5850012)
+  readAmp=2.157 segments/get  (segmentsConsulted=21510, getCalls=9972)
+```
+
+### Findings
+
+- **Write amplification: size-tiered is ~10x lower (4.50x vs. 44.60x).** This is the expected,
+  defining trade-off — `FullCompactStrategy(10)` rewrites the *entire* live dataset every time
+  segment count crosses 10, and that cost compounds repeatedly over a 50,000-key load plus
+  20,000 further operations. `SizeTieredCompactStrategy` only ever merges segments within a
+  similarly-sized tier, so a given byte gets rewritten roughly once per tier it passes through
+  rather than once per full-database merge — dramatically fewer total bytes moved.
+- **Read amplification: size-tiered is ~1.6x higher (2.157 vs. 1.312 segments/get).** Also
+  exactly the expected direction — full compaction aggressively collapses segment count back down
+  after every trigger, so there are usually few segments to check per lookup. Size-tiered
+  deliberately lets same-sized tiers coexist without merging across tiers, so more segments
+  survive at any given moment, and more of them can plausibly hold a given key.
+- **Space amplification is close to parity (1.00x vs. 1.10x), smaller than the other two effects
+  but still in the expected direction.** A full compaction is, by construction, driven back to
+  the true logical size every time it fires (hence exactly 1.00x). Size-tiered's more conservative
+  merging leaves a small amount of superseded/duplicate data sitting in not-yet-merged tiers at
+  any snapshot in time — real, but modest at this workload's scale, since Zipfian skew means most
+  churn concentrates in a small hot-key set that cycles through tiers relatively quickly.
+
+Taken together: this is the size-tiered vs. leveled trade-off from first principles, reproduced
+as measured numbers on this project's own implementation rather than just theory — size-tiered
+trades a large, real write-amplification win for a smaller but real read-amplification cost, with
+space amplification only mildly affected at this workload's scale.
+
+### Caveats
+
+Deterministic and reproducible (unlike every wall-clock benchmark in this document), but still a
+single workload shape, single seed, single set of strategy parameters
+(`minSegmentsPerTier=4, bucketLow=0.5, bucketHigh=1.5` for size-tiered;
+`compactionThreshold=10` for full compaction) — different parameter choices would shift the exact
+ratios, though not the qualitative direction of the trade-off, which follows directly from each
+strategy's structure rather than from these specific numbers.

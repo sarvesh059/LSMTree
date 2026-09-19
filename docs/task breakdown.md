@@ -101,7 +101,7 @@ exist to have something to measure, and should reflect the final, concurrent-saf
       whose filter reports "absent."
 - [x] **T7.2 Range scan.** AC: a merged ascending iterator over memTable + all segments;
       newest wins; tombstones omitted; correct across segment boundaries.
-- [ ] **T7.3 Compaction strategy (size-tiered or leveled).** AC: define the trigger and
+- [x] **T7.3 Compaction strategy (size-tiered or leveled).** AC: define the trigger and
       show its write- vs read/space-amplification behavior on a workload.
 - [ ] **T7.6 Concurrent access safety.** Currently zero synchronization anywhere
       (`RBT`/`MemTable` mutation, the `memTable` field swap on flush, WAL/Manifest file
