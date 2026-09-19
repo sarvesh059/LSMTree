@@ -99,7 +99,7 @@ exist to have something to measure, and should reflect the final, concurrent-saf
 - [x] **T7.1 Bloom filter per SSTable.** AC: never a false negative; false-positive rate
       within ~2× of target for the chosen bits/hashes; a `get` provably skips a segment
       whose filter reports "absent."
-- [ ] **T7.2 Range scan.** AC: a merged ascending iterator over memTable + all segments;
+- [x] **T7.2 Range scan.** AC: a merged ascending iterator over memTable + all segments;
       newest wins; tombstones omitted; correct across segment boundaries.
 - [ ] **T7.3 Compaction strategy (size-tiered or leveled).** AC: define the trigger and
       show its write- vs read/space-amplification behavior on a workload.

@@ -8,6 +8,7 @@ import core.Value;
 import core.key.KeyCodec;
 import cursor.DataFileCursor;
 import cursor.EntrySource;
+import cursor.RangeCursor;
 
 import java.io.*;
 import java.util.ArrayList;
@@ -23,7 +24,14 @@ public class SSTable<K extends Comparable<K>> {
 
     public Segment<K> write(List<Entry<K, Value>> entries, File dataFile, File indexFile, File bloomFilterFile, int sampleEvery) throws IOException {
         Iterator<Entry<K, Value>> it = entries.iterator();
-        EntrySource<K> source = new EntrySource<K>() {
+        EntrySource<K> source = memTableCursor(entries);
+
+        return write(source, dataFile, indexFile, bloomFilterFile, sampleEvery, entries.size());
+    }
+
+    public EntrySource<K> memTableCursor(List<Entry<K,Value>> entries){
+        Iterator<Entry<K, Value>> it = entries.iterator();
+        return new EntrySource<K>() {
             @Override
             public boolean hasNext() {
                 return it.hasNext();
@@ -39,8 +47,6 @@ public class SSTable<K extends Comparable<K>> {
 
             }
         };
-
-        return write(source, dataFile, indexFile, bloomFilterFile, sampleEvery, entries.size());
     }
 
     public Segment<K> write(EntrySource<K> entries, File dataFile, File indexFile, File bloomFilterFile, int sampleEvery, int approxEntries) throws IOException {
@@ -151,6 +157,41 @@ public class SSTable<K extends Comparable<K>> {
 
     public EntrySource<K> openCursor(File dataFile) throws IOException {
         return new DataFileCursor<>(dataFile, this.keyCodec);
+    }
+
+    public EntrySource<K> rangeCursor(File dataFile, List<IndexEntry> loadedIndex, byte[] low, byte[] high) throws IOException{
+        IndexEntry floorIndexEntry = findFloorSample(low, loadedIndex);
+
+        long previousOffset = 0;
+        if(floorIndexEntry != null) previousOffset = floorIndexEntry.getOffset();
+
+        boolean noKeyReachesLow = false;
+        try (RandomAccessFile readStream = new RandomAccessFile(dataFile, "r")) {
+            if(floorIndexEntry == null){
+                int totalEntries = readStream.readInt();
+                previousOffset = readStream.getFilePointer();
+            }
+            readStream.seek(previousOffset);
+            while (true) {
+                byte[] nextKey;
+                Value value;
+                try {
+                    nextKey = this.keyCodec.readRawEncoded(readStream);
+                    value = Value.readFrom(readStream);
+                } catch (EOFException e) {
+                    noKeyReachesLow = true;
+                    break;
+                }
+
+                int cmp = this.keyCodec.compareEncoded(nextKey,low);
+                if (cmp >= 0) break;
+                previousOffset = readStream.getFilePointer();
+            }
+        }
+
+        RangeCursor<K> cursor = new RangeCursor<>(low, high, dataFile, this.keyCodec);
+        cursor.seek(noKeyReachesLow ? dataFile.length() : previousOffset);
+        return cursor;
     }
 
     record ScanResult<V>(V value, int entriesRead) {

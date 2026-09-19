@@ -1,10 +1,12 @@
 package LSMTree;
 
+import RBT.Entry;
 import compactation.CompactStrategyImpl.FullCompactStrategy;
 import compactation.MergeStrategyImpl.FullLoadMergeStrategy;
 import compactation.MergeStrategyImpl.StreamingMergeStrategy;
 import core.Value;
 import core.key.KeyCodecImpl.IntegerKeyCodec;
+import cursor.EntrySource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -15,7 +17,9 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -58,6 +62,18 @@ public class LSMTreeTest {
         File[] files = dir.toFile().listFiles((_, name) -> name.startsWith("dataFile-"));
         assertNotNull(files, "expected the directory to exist and be listable");
         return files;
+    }
+
+    private List<Entry<Integer, Value>> scanEntries(LSMTree<Integer> tree, int low, int high) throws IOException {
+        List<Entry<Integer, Value>> result = new ArrayList<>();
+        try (EntrySource<Integer> cursor = tree.scan(low, high)) {
+            while (cursor.hasNext()) result.add(cursor.next());
+        }
+        return result;
+    }
+
+    private List<Entry<Integer, Value>> scanEntries(int low, int high) throws IOException {
+        return scanEntries(this.lsmTree, low, high);
     }
 
     @Test
@@ -328,6 +344,130 @@ public class LSMTreeTest {
                     "merged segment (" + mergedFile.length() + " bytes) should be smaller than the sum of the " +
                             "two segments it replaced (" + preCompactTotalBytes + " bytes), since the duplicate " +
                             "key and the large tombStoned payload are both eliminated by the merge");
+        }
+    }
+
+    @Test
+    void scanOnMemTableOnlyReturnsInRangeEntriesAscending() throws IOException {
+        lsmTree.put(3, singleByteValue(3));
+        lsmTree.put(1, singleByteValue(1));
+        lsmTree.put(2, singleByteValue(2));
+
+        List<Entry<Integer, Value>> result = scanEntries(1, 2);
+
+        assertEquals(List.of(1, 2), result.stream().map(Entry::getKey).toList());
+    }
+
+    @Test
+    void scanOnSingleFlushedSegmentReturnsInRangeEntries() throws IOException {
+        putFourKeysCrossingThreshold();
+
+        List<Entry<Integer, Value>> result = scanEntries(2, 3);
+
+        assertEquals(List.of(2, 3), result.stream().map(Entry::getKey).toList());
+    }
+
+    @Test
+    void scanMergesMemTableAndSegment() throws IOException {
+        putFourKeysCrossingThreshold();
+        lsmTree.put(100, singleByteValue(100));
+
+        List<Entry<Integer, Value>> result = scanEntries(3, 100);
+
+        assertEquals(List.of(3, 4, 100), result.stream().map(Entry::getKey).toList());
+    }
+
+    @Test
+    void scanMemTableUpdateShadowsSegmentValue() throws IOException {
+        putFourKeysCrossingThreshold();
+        Value updated = Value.of("updated".getBytes(StandardCharsets.UTF_8));
+        lsmTree.put(2, updated);
+
+        List<Entry<Integer, Value>> result = scanEntries(1, 4);
+
+        assertEquals(List.of(1, 2, 3, 4), result.stream().map(Entry::getKey).toList());
+        assertEquals(updated, result.stream().filter(e -> e.getKey() == 2).findFirst().orElseThrow().getValue());
+    }
+
+    @Test
+    void scanNewerSegmentShadowsOlderSegmentValue() throws IOException {
+        lsmTree.put(1, singleByteValue(1));
+        lsmTree.flush();
+
+        Value updated = Value.of("updated".getBytes(StandardCharsets.UTF_8));
+        lsmTree.put(1, updated);
+        lsmTree.flush();
+
+        List<Entry<Integer, Value>> result = scanEntries(0, 5);
+
+        assertEquals(1, result.size());
+        assertEquals(updated, result.getFirst().getValue());
+    }
+
+    @Test
+    void scanOmitsTombstonedKeyEntirely() throws IOException {
+        putFourKeysCrossingThreshold();
+        lsmTree.put(3, Value.tombstone());
+
+        List<Entry<Integer, Value>> result = scanEntries(1, 4);
+
+        assertEquals(List.of(1, 2, 4), result.stream().map(Entry::getKey).toList());
+    }
+
+    @Test
+    void scanTombstoneAcrossSegmentsOmitsKeyEntirely() throws IOException {
+        lsmTree.put(1, singleByteValue(1));
+        lsmTree.flush();
+
+        lsmTree.put(1, Value.tombstone());
+        lsmTree.flush();
+
+        List<Entry<Integer, Value>> result = scanEntries(0, 5);
+
+        assertEquals(List.of(), result);
+    }
+
+    @Test
+    void scanOutsideAllPresentKeysReturnsEmpty() throws IOException {
+        putFourKeysCrossingThreshold();
+
+        List<Entry<Integer, Value>> result = scanEntries(100, 200);
+
+        assertEquals(List.of(), result);
+    }
+
+    @Test
+    void scanWithLowGreaterThanHighReturnsEmpty() throws IOException {
+        putFourKeysCrossingThreshold();
+
+        List<Entry<Integer, Value>> result = scanEntries(4, 1);
+
+        assertEquals(List.of(), result);
+    }
+
+    @Test
+    void scanCorrectAfterCompaction() throws IOException {
+        LSMTree<Integer> tree = newTreeWithCompactionThreshold(dataDir.resolve("scan-post-compact"), 100);
+        try {
+            tree.put(1, singleByteValue(1));
+            tree.put(2, singleByteValue(2));
+            tree.flush();
+
+            Value updated = Value.of("updated".getBytes(StandardCharsets.UTF_8));
+            tree.put(2, updated);
+            tree.put(3, singleByteValue(3));
+            tree.flush();
+
+            List<Entry<Integer, Value>> before = scanEntries(tree, 1, 3);
+
+            tree.compact();
+
+            List<Entry<Integer, Value>> after = scanEntries(tree, 1, 3);
+
+            assertEquals(before.stream().map(Entry::getKey).toList(), after.stream().map(Entry::getKey).toList());
+            assertEquals(before.stream().map(Entry::getValue).toList(), after.stream().map(Entry::getValue).toList());
+        } finally {
+            tree.close();
         }
     }
 

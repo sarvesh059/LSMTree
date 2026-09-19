@@ -398,4 +398,85 @@ public class SSTableTest {
             return super.decode(in);
         }
     }
+
+    private List<Integer> rangeKeys(File dataFile, List<IndexEntry> loadedIndex, int low, int high) throws IOException {
+        List<Integer> keys = new ArrayList<>();
+        byte[] encodedLow = ssTable.keyCodec.encodeKey(low);
+        byte[] encodedHigh = ssTable.keyCodec.encodeKey(high);
+        try (EntrySource<Integer> cursor = ssTable.rangeCursor(dataFile, loadedIndex, encodedLow, encodedHigh)) {
+            while (cursor.hasNext()) keys.add(cursor.next().getKey());
+        }
+        return keys;
+    }
+
+    @Test
+    void rangeCursorInsideOneSampleIntervalReturnsExactKeys() throws IOException {
+        List<Entry<Integer, Value>> entries = buildEntries(20);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5);
+        List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
+
+        assertEquals(List.of(7, 8, 9), rangeKeys(dataFile, loaded, 7, 9));
+    }
+
+    @Test
+    void rangeCursorSpanningMultipleSampleIntervalsReturnsExactKeys() throws IOException {
+        List<Entry<Integer, Value>> entries = buildEntries(20);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5);
+        List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
+
+        assertEquals(entries.subList(3, 18).stream().map(Entry::getKey).toList(), rangeKeys(dataFile, loaded, 3, 17));
+    }
+
+    @Test
+    void rangeCursorWithLowBelowFirstKeyStartsFromBeginning() throws IOException {
+        List<Entry<Integer, Value>> entries = buildEntries(20);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5);
+        List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
+
+        assertEquals(List.of(0, 1, 2, 3, 4), rangeKeys(dataFile, loaded, -100, 4));
+    }
+
+    @Test
+    void rangeCursorWithHighAboveLastKeyReadsToEnd() throws IOException {
+        List<Entry<Integer, Value>> entries = buildEntries(20);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5);
+        List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
+
+        assertEquals(List.of(15, 16, 17, 18, 19), rangeKeys(dataFile, loaded, 15, 1000));
+    }
+
+    @Test
+    void rangeCursorWithLowAboveEveryKeyReturnsEmptyWithoutThrowing() throws IOException {
+        List<Entry<Integer, Value>> entries = buildEntries(10);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5);
+        List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
+
+        assertEquals(List.of(), rangeKeys(dataFile, loaded, 100, 200));
+    }
+
+    @Test
+    void rangeCursorWithLowGreaterThanHighReturnsEmpty() throws IOException {
+        List<Entry<Integer, Value>> entries = buildEntries(20);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5);
+        List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
+
+        assertEquals(List.of(), rangeKeys(dataFile, loaded, 15, 5));
+    }
+
+    @Test
+    void rangeCursorOnExactBoundaryKeysIncludesBothEndsInclusive() throws IOException {
+        List<Entry<Integer, Value>> entries = buildEntries(20);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5);
+        List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
+
+        assertEquals(List.of(5, 6, 7, 8, 9, 10), rangeKeys(dataFile, loaded, 5, 10));
+    }
+
+    @Test
+    void rangeCursorOnEmptyTableReturnsEmptyWithoutThrowing() throws IOException {
+        ssTable.write(new ArrayList<>(), dataFile, indexFile, bloomFilterFile, 5);
+        List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
+
+        assertEquals(List.of(), rangeKeys(dataFile, loaded, 0, 100));
+    }
 }

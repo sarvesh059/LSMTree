@@ -9,6 +9,8 @@ import compactation.MergeStrategy;
 import core.Segment;
 import core.Value;
 import core.key.KeyCodec;
+import cursor.EntrySource;
+import cursor.MergeCursor;
 import manifest.Manifest;
 import memTable.MemTable;
 
@@ -173,6 +175,17 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         }
 
         cleanUp();
+    }
+
+    EntrySource<K> scan(K low, K high) throws IOException{
+        List<EntrySource<K>> cursors = new ArrayList<>();
+        for(Segment<K> segment : this.segments){
+            cursors.add(this.ssTable.rangeCursor(segment.getDataFile(),segment.getLoadedIndex(), this.codec.encodeKey(low), this.codec.encodeKey(high)));
+        }
+
+        cursors.add(this.ssTable.memTableCursor(this.memTable.range(low, high)));
+
+        return new MergeCursor<>(cursors);
     }
 
     @Override
