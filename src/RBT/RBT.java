@@ -140,7 +140,6 @@ public class RBT<K extends Comparable<K>,V> {
 
     public List<K> range(K low, K high){
         List<Entry<K, V>> list = rangeEntries(low, high);
-        range(this.root, low, high, list);
         return list.stream().map(kvEntry -> kvEntry.getKey()).toList();
     }
 
