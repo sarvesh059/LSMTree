@@ -4,6 +4,7 @@ import RBT.Entry;
 import core.IndexEntry;
 import core.Value;
 import core.key.KeyCodecImpl.IntegerKeyCodec;
+import cursor.EntrySource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -295,7 +296,7 @@ public class SSTableTest {
         ssTable.write(entries,dataFile, indexFile, bloomFilterFile, 4);
 
         List<Entry<Integer, Value>> allReadEntries = ssTable.readAll(dataFile);
-        try(SSTable<Integer>.EntryCursor cursor = ssTable.openCursor(dataFile)){
+        try(EntrySource<Integer> cursor = ssTable.openCursor(dataFile)){
             for(Entry<Integer, Value> entry: allReadEntries){
                 boolean cursorHasNext = cursor.hasNext();
                 Entry<Integer, Value> cursorEntry = cursor.next();
@@ -313,7 +314,7 @@ public class SSTableTest {
     @Test
     void emptyDataFileCursorReturnNoEntries() throws IOException {
         ssTable.write(new ArrayList<>(), dataFile, indexFile, bloomFilterFile, 5);
-        try(SSTable<Integer>.EntryCursor cursor = ssTable.openCursor(dataFile)){
+        try(EntrySource<Integer> cursor = ssTable.openCursor(dataFile)){
             assertFalse(cursor.hasNext(), "EntryCursor hasNext() should return false for empty file");
             assertNull(cursor.next(),"EntryCursor next() return null when there is nothing to read");
         }
@@ -324,11 +325,11 @@ public class SSTableTest {
         List<Entry<Integer, Value>> entries = buildEntries(5);
         ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5);
 
-        try (SSTable<Integer>.EntryCursor cursor = ssTable.openCursor(dataFile)) {
+        try (EntrySource<Integer> cursor = ssTable.openCursor(dataFile)) {
             cursor.next();
         }
 
-        try (SSTable<Integer>.EntryCursor reopened = ssTable.openCursor(dataFile)) {
+        try (EntrySource<Integer> reopened = ssTable.openCursor(dataFile)) {
             assertTrue(reopened.hasNext(), "a fresh cursor on the same file should read from the beginning again");
             assertEquals(entries.getFirst().getKey(), reopened.next().getKey(), "reopened cursor should start from the first entry");
         }
@@ -339,7 +340,7 @@ public class SSTableTest {
         List<Entry<Integer, Value>> entries = buildEntries(10);
         ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 4);
 
-        SSTable<Integer>.EntryCursor cursor = ssTable.openCursor(dataFile);
+        EntrySource<Integer> cursor = ssTable.openCursor(dataFile);
         cursor.next();
         cursor.next();
 
@@ -351,8 +352,8 @@ public class SSTableTest {
         List<Entry<Integer, Value>> entries = buildEntries(5);
         ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5);
 
-        try (SSTable<Integer>.EntryCursor cursorA = ssTable.openCursor(dataFile);
-             SSTable<Integer>.EntryCursor cursorB = ssTable.openCursor(dataFile)) {
+        try (EntrySource<Integer> cursorA = ssTable.openCursor(dataFile);
+             EntrySource<Integer> cursorB = ssTable.openCursor(dataFile)) {
 
             // advance cursorA well ahead of cursorB
             Entry<Integer, Value> a0 = cursorA.next();

@@ -6,6 +6,8 @@ import core.IndexEntry;
 import core.Segment;
 import core.Value;
 import core.key.KeyCodec;
+import cursor.DataFileCursor;
+import cursor.EntrySource;
 
 import java.io.*;
 import java.util.ArrayList;
@@ -147,38 +149,10 @@ public class SSTable<K extends Comparable<K>> {
         return floor;
     }
 
-    public EntryCursor openCursor(File dataFile) throws IOException {
-        return new EntryCursor(dataFile);
+    public EntrySource<K> openCursor(File dataFile) throws IOException {
+        return new DataFileCursor<>(dataFile, this.keyCodec);
     }
 
     record ScanResult<V>(V value, int entriesRead) {
-    }
-
-    public class EntryCursor implements EntrySource<K> {
-        private final RandomAccessFile input;
-        private final int entryCount;
-        private int entriesRead = 0;
-
-        private EntryCursor(File dataFile) throws IOException {
-            this.input = new RandomAccessFile(dataFile, "r");
-            this.entryCount = input.readInt();
-        }
-
-        public boolean hasNext() {
-            return entriesRead < entryCount;
-        }
-
-        public Entry<K, Value> next() throws IOException {
-            if (entriesRead >= entryCount) return null;
-            K key = SSTable.this.keyCodec.decode(input);
-            Value value = Value.readFrom(input);
-            entriesRead++;
-            return new Entry<>(key, value);
-        }
-
-        @Override
-        public void close() throws IOException {
-            input.close();
-        }
     }
 }
