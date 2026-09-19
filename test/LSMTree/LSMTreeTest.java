@@ -2,6 +2,7 @@ package LSMTree;
 
 import RBT.Entry;
 import compactation.CompactStrategyImpl.FullCompactStrategy;
+import compactation.CompactStrategyImpl.SizeTieredCompactStrategy;
 import compactation.MergeStrategyImpl.FullLoadMergeStrategy;
 import compactation.MergeStrategyImpl.StreamingMergeStrategy;
 import core.Value;
@@ -468,6 +469,33 @@ public class LSMTreeTest {
             assertEquals(before.stream().map(Entry::getValue).toList(), after.stream().map(Entry::getValue).toList());
         } finally {
             tree.close();
+        }
+    }
+
+    @Test
+    void sizeTieredCompactionOfNonContiguousSegmentsStillResolvesCorrectly() throws IOException {
+        Path dir = dataDir.resolve("size-tiered-noncontiguous");
+        try (LSMTree<Integer> tree = new LSMTree<>(new IntegerKeyCodec(), dir, SAMPLE_EVERY, 1_000_000,
+                new SizeTieredCompactStrategy<>(2, 0.5, 1.5), new FullLoadMergeStrategy<>(new IntegerKeyCodec()))) {
+
+            tree.put(1, Value.of(new byte[]{1, 1, 1, 1}));
+            tree.flush(); // S1: 1 entry, small -- key 1's original value
+
+            tree.put(1, Value.of(new byte[]{2, 2, 2, 2})); // key 1's true latest value
+            tree.put(2, Value.of(new byte[]{3, 3, 3, 3})); // key 2's older value
+            for (int i = 1000; i < 1050; i++) tree.put(i, Value.of(new byte[200]));
+            tree.flush(); // S2: many large entries -- sits between S1 and S3 in flush order but far outside their size band
+
+            tree.put(2, Value.of(new byte[]{4, 4, 4, 4})); // key 2's true latest value
+            tree.flush(); // S3: 1 entry, small (same size as S1) -- triggers auto-compaction of {S1, S3}, skipping S2
+
+            assertAll(
+                    () -> assertEquals(2, tree.segmentCount(), "S2 stays untouched; S1 and S3 merge into one"),
+                    () -> assertEquals(Value.of(new byte[]{2, 2, 2, 2}), tree.get(1),
+                            "key 1's true latest value lives in the untouched S2, not the merged segment's stale copy from S1"),
+                    () -> assertEquals(Value.of(new byte[]{4, 4, 4, 4}), tree.get(2),
+                            "key 2's true latest value lives in the merged segment (from S3), not S2's stale older copy")
+            );
         }
     }
 
