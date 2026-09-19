@@ -38,6 +38,10 @@ public class MemTable<K extends Comparable<K>> {
         return this.tree.entries();
     }
 
+    public List<Entry<K, Value>> range(K low, K high){
+        return this.tree.rangeEntries(low, high);
+    }
+
     public boolean isFull(){
         return this.sizeInBytes >= this.threshold;
     }

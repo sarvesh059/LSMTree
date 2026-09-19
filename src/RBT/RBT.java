@@ -1,5 +1,7 @@
 package RBT;
 
+import core.Value;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -130,24 +132,30 @@ public class RBT<K extends Comparable<K>,V> {
         else node2.makeNodeBlack();
     }
 
-    public List<K> range(K low, K high){
-        List<K> list = new ArrayList<>();
+    public List<Entry<K, V>> rangeEntries(K low, K high){
+        List<Entry<K, V>> list = new ArrayList<>();
         range(this.root, low, high, list);
         return list;
     }
 
-    void range(Node<K, V> node, K low, K high, List<K> keys){
+    public List<K> range(K low, K high){
+        List<Entry<K, V>> list = rangeEntries(low, high);
+        range(this.root, low, high, list);
+        return list.stream().map(kvEntry -> kvEntry.getKey()).toList();
+    }
+
+    void range(Node<K, V> node, K low, K high, List<Entry<K, V>> entries){
         if(node == null) return;
         K key = node.getKey();
 
         if(key.compareTo(low) > 0){
-            range(node.getLeft(), low, high, keys);
+            range(node.getLeft(), low, high, entries);
         }
         if(low.compareTo(key) <= 0 && high.compareTo(key) >=0){
-            keys.add(key);
+            entries.add(new Entry<>(node.getKey(), node.getVal()));
         }
         if(key.compareTo(high) < 0){
-            range(node.getRight(), low, high, keys);
+            range(node.getRight(), low, high, entries);
         }
     }
 
