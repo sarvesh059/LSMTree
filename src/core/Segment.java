@@ -3,6 +3,8 @@ package core;
 import bloomFilter.BloomFilter;
 
 import java.io.File;
+import java.io.IOException;
+import java.io.RandomAccessFile;
 import java.util.List;
 
 public class Segment<K> {
@@ -39,5 +41,9 @@ public class Segment<K> {
 
     public long getMaxEventId(){
         return this.maxEventId;
+    }
+
+    public long getSize(){
+        return this.dataFile.length();
     }
 }
