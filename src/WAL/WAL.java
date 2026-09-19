@@ -10,6 +10,7 @@ public class WAL<K extends Comparable<K>> implements Closeable {
     private final KeyCodec<K> keyCodec;
     private final File walFile;
     private final RandomAccessFile fileStream;
+    private long latestEventId = -1;
 
     public WAL(KeyCodec<K> keyCodec, File walFile) throws IOException{
         this.keyCodec = keyCodec;
@@ -19,6 +20,7 @@ public class WAL<K extends Comparable<K>> implements Closeable {
     }
 
     public void append(K key, Value value) throws IOException {
+        latestEventId = Math.max(latestEventId, value.getId());
         this.keyCodec.encode(key, this.fileStream);
         value.writeTo(this.fileStream);
     }
@@ -29,12 +31,17 @@ public class WAL<K extends Comparable<K>> implements Closeable {
                 try {
                     K key = this.keyCodec.decode(in);
                     Value value = Value.readFrom(in);
+                    latestEventId = Math.max(latestEventId, value.getId());
                     targetMemTable.put(key, value);
                 } catch (EOFException e) {
                     break;
                 }
             }
         }
+    }
+
+    public long getLatestEventId(){
+        return this.latestEventId;
     }
 
     public void fsync() throws IOException {

@@ -14,11 +14,13 @@ public class DataFileCursor<K> implements EntrySource<K> {
     private final KeyCodec<K> keyCodec;
     private final int entryCount;
     private int entriesRead = 0;
+    private long maxEventId = 0;
 
     public DataFileCursor(File dataFile, KeyCodec<K> keyCodec) throws IOException {
         this.input = new RandomAccessFile(dataFile, "r");
         this.keyCodec = keyCodec;
         this.entryCount = input.readInt();
+        this.maxEventId = input.readLong();
     }
 
     public boolean hasNext() {
@@ -29,6 +31,7 @@ public class DataFileCursor<K> implements EntrySource<K> {
         if (entriesRead >= entryCount) return null;
         K key = this.keyCodec.decode(input);
         Value value = Value.readFrom(input);
+        this.maxEventId = Math.max(this.maxEventId, value.getId());
         entriesRead++;
         return new Entry<>(key, value);
     }

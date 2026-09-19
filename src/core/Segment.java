@@ -10,13 +10,15 @@ public class Segment<K> {
     private final List<IndexEntry> loadedIndex;
     private final BloomFilter bloomFilter;
     private final int entryCount;
+    private final long maxEventId;
 
 
-    public Segment(File dataFile, List<IndexEntry> loadedIndex, BloomFilter bloomFilter, int entryCount) {
+    public Segment(File dataFile, List<IndexEntry> loadedIndex, BloomFilter bloomFilter, int entryCount, long maxEventId) {
         this.dataFile = dataFile;
         this.loadedIndex = loadedIndex;
         this.bloomFilter = bloomFilter;
         this.entryCount = entryCount;
+        this.maxEventId = maxEventId;
     }
 
     public File getDataFile() {
@@ -33,5 +35,9 @@ public class Segment<K> {
 
     public int getEntryCount(){
         return this.entryCount;
+    }
+
+    public long getMaxEventId(){
+        return this.maxEventId;
     }
 }

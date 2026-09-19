@@ -53,10 +53,12 @@ public class SSTable<K extends Comparable<K>> {
         List<IndexEntry> indexEntries = new ArrayList<>();
         BloomFilter bloomFilter = new BloomFilter(approxEntries, 0.02);
         int newEntriesAdded = 0;
+        long maxEventId = 0L;
         try (RandomAccessFile dataFileWriter = new RandomAccessFile(dataFile, "rw");
              RandomAccessFile indexFileWriter = new RandomAccessFile(indexFile, "rw");
              RandomAccessFile bloomFilterWriter = new RandomAccessFile(bloomFilterFile, "rw")) {
             dataFileWriter.writeInt(0);
+            dataFileWriter.writeLong(maxEventId);
             indexFileWriter.writeInt(0);
 
             while (entries.hasNext()) {
@@ -69,6 +71,7 @@ public class SSTable<K extends Comparable<K>> {
                 }
                 dataFileWriter.write(encodedKey);
                 entry.getValue().writeTo(dataFileWriter);
+                maxEventId = Math.max(entry.getValue().getId(), maxEventId);
                 bloomFilter.add(encodedKey);
                 newEntriesAdded++;
             }
@@ -77,6 +80,7 @@ public class SSTable<K extends Comparable<K>> {
             indexFileWriter.seek(0);
             bloomFilterWriter.seek(0);
             dataFileWriter.writeInt(newEntriesAdded);
+            dataFileWriter.writeLong(maxEventId);
             indexFileWriter.writeInt(indexEntries.size());
             bloomFilter.writeTo(bloomFilterWriter);
 
@@ -84,12 +88,13 @@ public class SSTable<K extends Comparable<K>> {
             indexFileWriter.getFD().sync();
             bloomFilterWriter.getFD().sync();
         }
-        return new Segment<>(dataFile, indexEntries, bloomFilter, newEntriesAdded);
+        return new Segment<>(dataFile, indexEntries, bloomFilter, newEntriesAdded, maxEventId);
     }
 
     public List<Entry<K, Value>> readAll(File file) throws IOException {
         try (RandomAccessFile input = new RandomAccessFile(file, "r")) {
             int entryCount = input.readInt();
+            long maxEventId = input.readLong();
             List<Entry<K, Value>> entries = new ArrayList<>();
             for (int i = 0; i < entryCount; i++) {
                 K key = this.keyCodec.decode(input);
@@ -169,6 +174,7 @@ public class SSTable<K extends Comparable<K>> {
         try (RandomAccessFile readStream = new RandomAccessFile(dataFile, "r")) {
             if(floorIndexEntry == null){
                 int totalEntries = readStream.readInt();
+                long maxEventId = readStream.readLong();
                 previousOffset = readStream.getFilePointer();
             }
             readStream.seek(previousOffset);

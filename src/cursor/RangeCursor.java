@@ -15,12 +15,14 @@ public class RangeCursor<K extends Comparable<K>> implements EntrySource<K>{
     private final RandomAccessFile input;
     private final KeyCodec<K> keyCodec;
     private final int totalEntries;
+    private long maxEventId;
 
     public RangeCursor(byte[] low, byte[] high, File dataFile, KeyCodec<K> keyCodec) throws IOException{
         this.low = low;
         this.high = high;
         this.input = new RandomAccessFile(dataFile, "r");
         this.totalEntries = this.input.readInt();
+        this.maxEventId = this.input.readLong();
         this.keyCodec = keyCodec;
     }
 
@@ -47,6 +49,7 @@ public class RangeCursor<K extends Comparable<K>> implements EntrySource<K>{
             byte[] key = this.keyCodec.readRawEncoded(this.input);
             if(this.keyCodec.compareEncoded(low, key) <= 0 && this.keyCodec.compareEncoded(high, key) >= 0){
                 Value val = Value.readFrom(this.input);
+                this.maxEventId = Math.max(this.maxEventId, val.getId());
                 return new Entry<>(this.keyCodec.decodeKey(key), val);
             }
             return null;

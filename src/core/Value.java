@@ -5,24 +5,36 @@ import java.util.Arrays;
 import java.util.Objects;
 
 public class Value {
+    static final long UNSEQUENCED = -1L;
+
     boolean tombstone;
     byte[] payload;
-    int sizeInBytes = 1;
+    int sizeInBytes = 1+8;
+    final long id;
 
-    private Value(byte[] payload, boolean tombstone){
+    private Value(long id, byte[] payload, boolean tombstone){
         if(payload != null){
             this.payload = payload.clone();
             this.sizeInBytes += payload.length + 4 ;
         }
         this.tombstone = tombstone;
+        this.id = id;
     }
 
     public static Value of(byte[] data){
-        return new Value(data, false);
+        return new Value(UNSEQUENCED, data, false);
     }
 
     public static Value tombstone(){
-        return new Value(null, true);
+        return new Value(UNSEQUENCED, null, true);
+    }
+
+    public static Value of(long id, byte[] data){
+        return new Value(id, data, false);
+    }
+
+    public static Value tombstone(long id){
+        return new Value(id,null, true);
     }
 
     public boolean isTombstone(){
@@ -34,7 +46,12 @@ public class Value {
         return payload.clone();
     }
 
+    public long getId(){
+        return this.id;
+    }
+
     public void writeTo(DataOutput out) throws IOException{
+        out.writeLong(this.id);
         out.writeBoolean(tombstone);
         if(!tombstone){
             out.writeInt(this.payload.length);
@@ -43,13 +60,18 @@ public class Value {
     }
 
     public static Value readFrom(DataInput in) throws IOException{
+        long id = in.readLong();
         boolean isTombstone = in.readBoolean();
-        if(isTombstone) return Value.tombstone();
+        if(isTombstone) return Value.tombstone(id);
 
         int length = in.readInt();
         byte[] data = new byte[length];
         in.readFully(data);
-        return Value.of(data);
+        return Value.of(id, data);
+    }
+
+    public static Value withId(long id, Value value){
+        return new Value(id, value.tombstone ? null : value.payload, value.tombstone);
     }
 
     public int getSizeInBytes(){

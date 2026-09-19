@@ -26,9 +26,9 @@ import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.*;
 
 public class LSMTreeTest {
-    // Each value below is a single-byte payload: size = 1 (flag) + 4 (length) + 1 (payload) = 6 bytes.
-    // threshold=20 means 3 puts (18 bytes) stay under it, and the 4th put (24 bytes) crosses it.
-    private static final int THRESHOLD = 20;
+    // Each value below is a single-byte payload: size = 1 (flag) + 8 (id) + 4 (length) + 1 (payload) = 14 bytes.
+    // threshold=50 means 3 puts (42 bytes) stay under it, and the 4th put (56 bytes) crosses it.
+    private static final int THRESHOLD = 50;
     private static final int SAMPLE_EVERY = 5;
 
     private Path dataDir;

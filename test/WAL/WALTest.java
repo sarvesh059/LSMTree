@@ -70,9 +70,11 @@ public class WALTest {
             wal.append(3, Value.tombstone());
         }
 
-        // simulate mid crash
+        // simulate mid crash: records 1 and 2 are each 4 (key) + 8 (id) + 1 (flag) + 4 (length) + 5
+        // (payload) = 22 bytes, ending at offset 44; truncating at 50 lands partway into record 3's
+        // id field, leaving records 1 and 2 fully intact and record 3 a partial, unreadable trailer.
         try (RandomAccessFile raf = new RandomAccessFile(walFile, "rw")) {
-            raf.setLength(30);
+            raf.setLength(50);
         }
 
         MemTable<Integer> memTable = new MemTable<>(1000);

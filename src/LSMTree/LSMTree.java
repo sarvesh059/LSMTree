@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicLong;
 
 
 public class LSMTree<K extends Comparable<K>> implements Closeable {
@@ -45,6 +46,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
     private final CompactionStrategy<K> compactionStrategy;
     private final MergeStrategy<K> mergeStrategy;
     private MemTable<K> memTable;
+    private final AtomicLong eventCounter;
 
     public LSMTree(KeyCodec<K> codec, Path dataDir, int indexSampleRate, int memTableThreshold, CompactionStrategy<K> compactionStrategy, MergeStrategy<K> mergeStrategy) throws IOException {
         Files.createDirectories(dataDir);
@@ -58,6 +60,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         this.indexSampleRate = indexSampleRate;
         this.compactionStrategy = compactionStrategy;
         this.mergeStrategy = mergeStrategy;
+        this.eventCounter = new AtomicLong(0);
 
         this.recover();
         this.cleanUp();
@@ -88,9 +91,10 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
     }
 
     public void put(K key, Value value) throws IOException {
-        this.wal.append(key, value);
+        Value valueWithId = Value.withId(this.eventCounter.incrementAndGet(), value);
+        this.wal.append(key, valueWithId);
         this.wal.fsync();
-        this.memTable.put(key, value);
+        this.memTable.put(key, valueWithId);
 
         if (memTable.isFull()) this.flush();
     }
@@ -126,6 +130,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
             }
         }
 
+        long maxEventId = 0;
         for (String dataFileName : liveDataFiles) {
             String indexFileName = INDEX_FILE_PREFIX + dataFileName.substring(DATA_FILE_PREFIX.length());
             String bloomFilterFileName = BLOOM_FILTER_FILE_PREFIX + dataFileName.substring(DATA_FILE_PREFIX.length());
@@ -135,12 +140,17 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
             if (dataFile.exists() && indexFile.exists() && bloomFilterFile.exists()) {
                 try(RandomAccessFile dataFileReader = new RandomAccessFile(dataFile, "r");
                 RandomAccessFile bloomFilterFileReader = new RandomAccessFile(bloomFilterFile, "r")){
-                this.segments.add(new Segment<>(dataFile, this.ssTable.loadIndex(indexFile), BloomFilter.readFrom(bloomFilterFileReader), dataFileReader.readInt()));
+                Segment<K> segment = new Segment<>(dataFile, this.ssTable.loadIndex(indexFile), BloomFilter.readFrom(bloomFilterFileReader), dataFileReader.readInt(), dataFileReader.readLong());
+                maxEventId = Math.max(maxEventId, segment.getMaxEventId());
+                this.segments.add(segment);
                 }
             }
         }
 
         this.wal.replay(this.memTable);
+
+        maxEventId = Math.max(maxEventId, this.wal.getLatestEventId());
+        this.eventCounter.set(maxEventId);
     }
 
     private void cleanUp() throws IOException {
@@ -166,7 +176,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         Segment<K> wipSegment = this.mergeStrategy.merge(selectedSegments, wipDataFile, indexFile, bloomFilterFile, this.indexSampleRate);
         Files.move(wipDataFile.toPath(), dataFile.toPath(), StandardCopyOption.ATOMIC_MOVE);
 
-        this.segments.add(new Segment<>(dataFile, wipSegment.getLoadedIndex(), wipSegment.getBloomFilter(), wipSegment.getEntryCount()));
+        this.segments.add(new Segment<>(dataFile, wipSegment.getLoadedIndex(), wipSegment.getBloomFilter(), wipSegment.getEntryCount(), wipSegment.getMaxEventId()));
         this.segments.removeAll(selectedSegments);
         Manifest.append(dataFileName, manifestFile);
 
