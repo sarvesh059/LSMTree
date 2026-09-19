@@ -9,50 +9,59 @@ import java.util.List;
 import java.util.PriorityQueue;
 
 public class MergeCursor<K extends Comparable<K>> implements EntrySource<K>{
-    private final PriorityQueue<Pair<Entry<K, Value>,  Integer>> pq = new PriorityQueue<>((a, b) -> {
-        if(a.getFirst().getKey().compareTo(b.getFirst().getKey()) == 0) return b.getSecond().compareTo(a.getSecond());
-        return a.getFirst().getKey().compareTo(b.getFirst().getKey());
+    private final PriorityQueue<CursorQueueEntry<K>> pq = new PriorityQueue<>((a,b) -> {
+        if(a.entry().getKey().equals(b.entry().getKey())){
+            return Long.compare(b.eventId(), a.eventId());
+        }
+        return a.entry().getKey().compareTo(b.entry().getKey());
     });
+
     private final EntrySource<K>[] cursors;
 
     public MergeCursor(List<EntrySource<K>> sources) throws IOException {
         this.cursors = sources.toArray(new EntrySource[0]);
         for (int i = 0; i < cursors.length; i++) {
-            if (cursors[i].hasNext()) pq.add(new Pair<>(cursors[i].next(), i));
+            if (cursors[i].hasNext()){
+                Entry<K, Value> entry = cursors[i].next();
+                pq.add(new CursorQueueEntry<>(entry, entry.getValue().getId(), i));
+            }
         }
     }
 
 
     @Override
     public boolean hasNext() throws IOException {
-        while(!pq.isEmpty() && pq.peek().getFirst().getValue().isTombstone()){
-            Pair<Entry<K, Value>,  Integer> tombstoneEntry = pq.poll();
-            moveCursor(tombstoneEntry.getSecond());
+        while(!pq.isEmpty() && pq.peek().entry().getValue().isTombstone()){
+            CursorQueueEntry<K> tombstoneEntry = pq.poll();
+            moveCursor(tombstoneEntry.index());
 
-            deduplicate(tombstoneEntry.getFirst().getKey());
+            deduplicate(tombstoneEntry.entry().getKey());
         }
         return !pq.isEmpty();
     }
 
     @Override
     public Entry<K, Value> next() throws IOException {
-        Pair<Entry<K, Value>,  Integer> minEntry = pq.poll();
-        moveCursor(minEntry.getSecond());
+        CursorQueueEntry<K> minEntry = pq.poll();
+        moveCursor(minEntry.index());
 
-        deduplicate(minEntry.getFirst().getKey());
+        deduplicate(minEntry.entry().getKey());
 
-        return minEntry.getFirst();
+        return minEntry.entry();
     }
 
     private void deduplicate(K key) throws IOException {
-        while(!pq.isEmpty() && pq.peek().getFirst().getKey().equals(key)){
-            Pair<Entry<K, Value>,  Integer> duplicateEntry = pq.poll();
-            moveCursor(duplicateEntry.getSecond());
+        while(!pq.isEmpty() && pq.peek().entry().getKey().equals(key)){
+            CursorQueueEntry<K> duplicateEntry = pq.poll();
+            moveCursor(duplicateEntry.index());
         }
     }
 
     private void moveCursor(int index) throws IOException {
-        if(cursors[index].hasNext()) pq.add(new Pair<>(cursors[index].next(), index));
+        if (cursors[index].hasNext()){
+            Entry<K, Value> entry = cursors[index].next();
+            pq.add(new CursorQueueEntry<>(entry, entry.getValue().getId(), index));
+        }
     }
 
     @Override

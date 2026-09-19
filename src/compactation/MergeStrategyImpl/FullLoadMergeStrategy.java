@@ -54,7 +54,7 @@ public class FullLoadMergeStrategy<K extends Comparable<K>> implements MergeStra
                     currentEntry = listEntry;
                 } else if (cmp == 0) {
                     tiedIndices.add(i);
-                    currentEntry = listEntry;
+                    currentEntry = (currentEntry.getValue().getId() < listEntry.getValue().getId()) ? listEntry : currentEntry;
                 }
             }
             if(currentEntry == null) break;
