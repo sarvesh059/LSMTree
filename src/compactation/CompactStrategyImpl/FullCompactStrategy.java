@@ -15,7 +15,7 @@ public class FullCompactStrategy<K extends Comparable<K>> implements CompactionS
 
     @Override
     public boolean shouldCompact(List<Segment<K>> segments) {
-        return segments.size() >= compactionThreshold;
+        return segments.size() >= Math.max(2, compactionThreshold);
     }
 
     @Override

@@ -25,7 +25,9 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 
 public class LSMTree<K extends Comparable<K>> implements Closeable {
@@ -40,7 +42,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
     private final Path dataDir;
     private final WAL<K> wal;
     private final SSTable<K> ssTable;
-    private volatile List<Segment<K>> segments;
+    private final AtomicReference<List<Segment<K>>> segments;
     private final int memTableThreshold;
     private final int indexSampleRate;
     private final CompactionStrategy<K> compactionStrategy;
@@ -49,6 +51,9 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
     private final AtomicLong eventCounter;
     private long getCallCount = 0;
     private long segmentsConsultedCount = 0;
+    private final ExecutorService compactionExecutor = Executors.newSingleThreadExecutor();
+    private volatile boolean compactionInProgress = false;
+    private final Object manifestLock = new Object();
 
     public LSMTree(KeyCodec<K> codec, Path dataDir, int indexSampleRate, int memTableThreshold, CompactionStrategy<K> compactionStrategy, MergeStrategy<K> mergeStrategy) throws IOException {
         Files.createDirectories(dataDir);
@@ -58,7 +63,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         this.memTableThreshold = memTableThreshold;
         this.wal = new WAL<>(this.codec, dataDir.resolve(WAL_FILE_NAME).toFile());
         this.ssTable = new SSTable<>(codec);
-        this.segments = new ArrayList<>();
+        this.segments = new AtomicReference<>(new ArrayList<>());
         this.indexSampleRate = indexSampleRate;
         this.compactionStrategy = compactionStrategy;
         this.mergeStrategy = mergeStrategy;
@@ -82,16 +87,25 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         File bloomFilterFile = this.dataDir.resolve(bloomFilterFileName).toFile();
 
         Segment<K> segment = this.ssTable.write(memTableEntries, dataFile, indexFile, bloomFilterFile, this.indexSampleRate);
-        Manifest.append(dataFileName, manifestFile());
 
-        List<Segment<K>> newSegmentList = new ArrayList<>(this.segments);
-        newSegmentList.add(segment);
-        this.segments = newSegmentList;
+        synchronized (this.manifestLock){
+            Manifest.append(dataFileName, manifestFile());
+        }
+
+        this.segments.updateAndGet(current -> {
+            List<Segment<K>> newList = new ArrayList<>(current);
+            newList.add(segment);
+            return newList;
+        });
 
         this.wal.reset();
         this.memTable = new MemTable<>(this.memTableThreshold);
 
-        if (this.compactionStrategy.shouldCompact(this.segments)) compact();
+        if (this.compactionStrategy.shouldCompact(this.segments.get()) && !compactionInProgress){
+            List<Segment<K>> selectedSegments = this.compactionStrategy.select(this.segments.get());
+            this.compactionInProgress = true;
+            compactionExecutor.submit(() -> runCompactionAsync(selectedSegments));
+        }
     }
 
     public synchronized void put(K key, Value value) throws IOException {
@@ -112,7 +126,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         }
         if (value != null) return value;
 
-        List<Segment<K>> segmentsSnapshot = this.segments;
+        List<Segment<K>> segmentsSnapshot = this.segments.get();
         int segmentsCount = segmentsSnapshot.size();
         byte[] encodedKey = this.codec.encodeKey(key);
         long maxEventId = -1L;
@@ -155,10 +169,14 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
             File bloomFilterFile = this.dataDir.resolve(bloomFilterFileName).toFile();
             if (dataFile.exists() && indexFile.exists() && bloomFilterFile.exists()) {
                 try(RandomAccessFile dataFileReader = new RandomAccessFile(dataFile, "r");
-                RandomAccessFile bloomFilterFileReader = new RandomAccessFile(bloomFilterFile, "r")){
-                Segment<K> segment = new Segment<>(dataFile, this.ssTable.loadIndex(indexFile), BloomFilter.readFrom(bloomFilterFileReader), dataFileReader.readInt(), dataFileReader.readLong());
-                maxEventId = Math.max(maxEventId, segment.getMaxEventId());
-                this.segments.add(segment);
+                    RandomAccessFile bloomFilterFileReader = new RandomAccessFile(bloomFilterFile, "r")){
+                    Segment<K> segment = new Segment<>(dataFile, this.ssTable.loadIndex(indexFile), BloomFilter.readFrom(bloomFilterFileReader), dataFileReader.readInt(), dataFileReader.readLong());
+                    maxEventId = Math.max(maxEventId, segment.getMaxEventId());
+                    this.segments.updateAndGet(current -> {
+                        List<Segment<K>> newList = new ArrayList<>(current);
+                        newList.add(segment);
+                        return newList;
+                    });
                 }
             }
         }
@@ -170,19 +188,29 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
     }
 
     private void cleanUp() throws IOException {
-        List<String> dataFileNames = this.segments.stream().map(kSegment -> kSegment.getDataFile().getName()).toList();
-        Manifest.rewrite(dataFileNames, this.dataDir.resolve(MANIFEST_FILE_NAME).toFile());
+        List<String> dataFileNames = this.segments.get().stream().map(kSegment -> kSegment.getDataFile().getName()).toList();
+        synchronized (this.manifestLock) {
+            Manifest.rewrite(dataFileNames, this.dataDir.resolve(MANIFEST_FILE_NAME).toFile());
+        }
     }
 
     synchronized void compact() throws IOException {
         File manifestFile = manifestFile();
-        List<Segment<K>> selectedSegments = this.compactionStrategy.select(this.segments);
+        List<Segment<K>> selectedSegments = this.compactionStrategy.select(this.segments.get());
+        this.sharedCompactionLogic(selectedSegments);
+    }
+
+    void sharedCompactionLogic(List<Segment<K>> selectedSegments) throws IOException {
+        File manifestFile = manifestFile();
         String uuid = UUID.randomUUID().toString();
         String wipDatafileName = WIP_FILE_PREFIX + DATA_FILE_PREFIX + uuid;
         String dataFileName = DATA_FILE_PREFIX + uuid;
         String indexFileName = INDEX_FILE_PREFIX + uuid;
         String bloomFilterFileName = BLOOM_FILTER_FILE_PREFIX+uuid;
-        Manifest.append(wipDatafileName, manifestFile);
+
+        synchronized (this.manifestLock) {
+            Manifest.append(wipDatafileName, manifestFile);
+        }
 
         File wipDataFile = this.dataDir.resolve(wipDatafileName).toFile();
         File dataFile = this.dataDir.resolve(dataFileName).toFile();
@@ -192,22 +220,45 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         Segment<K> wipSegment = this.mergeStrategy.merge(selectedSegments, wipDataFile, indexFile, bloomFilterFile, this.indexSampleRate);
         Files.move(wipDataFile.toPath(), dataFile.toPath(), StandardCopyOption.ATOMIC_MOVE);
 
-        List<Segment<K>> newSegmentList = new ArrayList<>(this.segments);
-        newSegmentList.removeAll(selectedSegments);
-        newSegmentList.add(new Segment<>(dataFile, wipSegment.getLoadedIndex(), wipSegment.getBloomFilter(), wipSegment.getEntryCount(), wipSegment.getMaxEventId()));
-        this.segments = newSegmentList;
-        Manifest.append(dataFileName, manifestFile);
+        Segment<K> newSegment = new Segment<>(dataFile, wipSegment.getLoadedIndex(), wipSegment.getBloomFilter(), wipSegment.getEntryCount(), wipSegment.getMaxEventId());
+        this.segments.updateAndGet(current -> {
+            List<Segment<K>> newSegmentList = new ArrayList<>(current);
+            newSegmentList.removeAll(selectedSegments);
+            newSegmentList.add(newSegment);
+            return newSegmentList;
 
-        for (Segment<K> segment : selectedSegments) {
-            Manifest.append(DELETED_FILE_PREFIX + segment.getDataFile().getName(), manifestFile);
+        });
+
+        synchronized (this.manifestLock) {
+            Manifest.append(dataFileName, manifestFile);
+            for (Segment<K> segment : selectedSegments) {
+                Manifest.append(DELETED_FILE_PREFIX + segment.getDataFile().getName(), manifestFile);
+            }
         }
 
         cleanUp();
     }
 
+    void runCompactionAsync(List<Segment<K>> selectedSegments){
+        try{
+            this.sharedCompactionLogic(selectedSegments);
+        } catch (Throwable _){
+
+        }finally {
+            synchronized (this){
+                this.compactionInProgress = false;
+                if (this.compactionStrategy.shouldCompact(this.segments.get())) {
+                    List<Segment<K>> nextSelectedSegments = this.compactionStrategy.select(this.segments.get());
+                    this.compactionInProgress = true;
+                    compactionExecutor.submit(() -> runCompactionAsync(nextSelectedSegments));
+                }
+            }
+        }
+    }
+
     EntrySource<K> scan(K low, K high) throws IOException{
         List<EntrySource<K>> cursors = new ArrayList<>();
-        for(Segment<K> segment : this.segments){
+        for(Segment<K> segment : this.segments.get()){
             cursors.add(this.ssTable.rangeCursor(segment.getDataFile(),segment.getLoadedIndex(), this.codec.encodeKey(low), this.codec.encodeKey(high)));
         }
 
@@ -223,6 +274,22 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
     @Override
     public void close() throws IOException {
         this.wal.close();
+        this.compactionExecutor.shutdown();
+        try {
+            this.compactionExecutor.awaitTermination(30, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public void awaitCompaction() throws InterruptedException {
+        while (true) {
+            try {
+                this.compactionExecutor.submit(() -> {}).get();
+            } catch (ExecutionException e) {
+                throw new RuntimeException(e);
+            }
+        }
     }
 
     int memTableSizeInBytes() {
@@ -230,11 +297,11 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
     }
 
     int segmentCount() {
-        return this.segments.size();
+        return this.segments.get().size();
     }
 
     List<Segment<K>> segments() {
-        return this.segments;
+        return this.segments.get();
     }
 
     long getCallCount() {

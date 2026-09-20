@@ -223,7 +223,7 @@ public class LSMTreeTest {
     }
 
     @Test
-    void crossingCompactionThresholdTriggersAutomaticCompaction() throws IOException {
+    void crossingCompactionThresholdTriggersAutomaticCompaction() throws IOException, InterruptedException {
         try (LSMTree<Integer> tree = newTreeWithCompactionThreshold(dataDir.resolve("auto-compact"), 1)) {
             tree.put(1, singleByteValue(1));
             tree.put(2, singleByteValue(2));
@@ -234,6 +234,7 @@ public class LSMTreeTest {
             for (int i = 5; i <= 8; i++)
                 tree.put(i, singleByteValue(i)); // flush #2 -> 2 segments crosses compaction threshold(1)
 
+            tree.awaitCompaction();
             assertEquals(1, tree.segmentCount(), "crossing the compaction threshold should automatically merge back down to a single segment");
             assertAll(
                     () -> assertEquals(singleByteValue(1), tree.get(1), "a key from the first (older) segment should survive the auto-compaction"),
@@ -473,7 +474,7 @@ public class LSMTreeTest {
     }
 
     @Test
-    void sizeTieredCompactionOfNonContiguousSegmentsStillResolvesCorrectly() throws IOException {
+    void sizeTieredCompactionOfNonContiguousSegmentsStillResolvesCorrectly() throws IOException, InterruptedException {
         Path dir = dataDir.resolve("size-tiered-noncontiguous");
         try (LSMTree<Integer> tree = new LSMTree<>(new IntegerKeyCodec(), dir, SAMPLE_EVERY, 1_000_000,
                 new SizeTieredCompactStrategy<>(2, 0.5, 1.5), new FullLoadMergeStrategy<>(new IntegerKeyCodec()))) {
@@ -489,6 +490,7 @@ public class LSMTreeTest {
             tree.put(2, Value.of(new byte[]{4, 4, 4, 4})); // key 2's true latest value
             tree.flush(); // S3: 1 entry, small (same size as S1) -- triggers auto-compaction of {S1, S3}, skipping S2
 
+            tree.awaitCompaction();
             assertAll(
                     () -> assertEquals(2, tree.segmentCount(), "S2 stays untouched; S1 and S3 merge into one"),
                     () -> assertEquals(Value.of(new byte[]{2, 2, 2, 2}), tree.get(1),

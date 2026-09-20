@@ -147,6 +147,25 @@ exist to have something to measure, and should reflect the final, concurrent-saf
       `LeveledMergeStrategy` that reuses the existing merge machinery but partitions its output
       into multiple segments instead of writing one.
 
+- [ ] **Concurrent (multi-job) compaction.** T7.6 Slice B's async compaction runs one compaction
+      at a time on a single-threaded executor — correct, but real systems (RocksDB) run several
+      compactions concurrently across the tree as long as their input segment sets don't overlap.
+      Needs a thread pool plus tracking *which files are currently being compacted*, so two jobs
+      never contend for the same input.
+- [ ] **Physical segment-file deletion + refcounting.** True since T6.1 and unchanged by T7.6:
+      every segment file this project has ever written stays on disk forever. Needs refcounted
+      `Segment`s — a reader pins whatever reference it grabbed; a file only gets deleted once
+      nothing live still references it (the same mechanism as LevelDB/RocksDB's `Version`).
+- [ ] **Write backpressure / stall when compaction falls behind.** Nothing currently slows writes
+      down if compaction can't keep up with the write rate — segments just accumulate and read
+      amplification degrades without bound. Real systems deliberately stall/throttle writes when
+      compaction falls behind (RocksDB's "write stall").
+- [ ] **Compaction observability.** No way currently to ask the tree how many compactions are
+      pending, how long the last one took, or how far behind compaction is — needed before this
+      could be trusted operationally.
+- [ ] **Backoff on repeated compaction failure.** A compaction that fails (e.g. disk full) just
+      fails again identically next time `flush()` triggers one — no circuit breaker.
+
 ---
 
 ### When you want a review
