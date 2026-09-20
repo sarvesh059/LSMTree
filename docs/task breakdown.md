@@ -147,24 +147,58 @@ exist to have something to measure, and should reflect the final, concurrent-saf
       `LeveledMergeStrategy` that reuses the existing merge machinery but partitions its output
       into multiple segments instead of writing one.
 
+**Deepening T7.6 toward production grade** (not new features — the same concurrency/async-compaction
+ground T7.6 already covers, taken further than its written AC required):
+
 - [ ] **Concurrent (multi-job) compaction.** T7.6 Slice B's async compaction runs one compaction
       at a time on a single-threaded executor — correct, but real systems (RocksDB) run several
       compactions concurrently across the tree as long as their input segment sets don't overlap.
       Needs a thread pool plus tracking *which files are currently being compacted*, so two jobs
-      never contend for the same input.
+      never contend for the same input. Only pays off for a strategy whose buckets are genuinely
+      independent (`SizeTieredCompactStrategy`) — `FullCompactStrategy` always selects everything,
+      so it can never meaningfully parallelize with itself.
 - [ ] **Physical segment-file deletion + refcounting.** True since T6.1 and unchanged by T7.6:
       every segment file this project has ever written stays on disk forever. Needs refcounted
       `Segment`s — a reader pins whatever reference it grabbed; a file only gets deleted once
-      nothing live still references it (the same mechanism as LevelDB/RocksDB's `Version`).
+      nothing live still references it (the same mechanism as LevelDB/RocksDB's `Version`). The
+      most invasive of this group — touches `get()`/`scan()`'s hot path directly with pin/unpin
+      discipline, not just the compaction subsystem.
 - [ ] **Write backpressure / stall when compaction falls behind.** Nothing currently slows writes
       down if compaction can't keep up with the write rate — segments just accumulate and read
       amplification degrades without bound. Real systems deliberately stall/throttle writes when
-      compaction falls behind (RocksDB's "write stall").
+      compaction falls behind (RocksDB's "write stall" — a graduated slowdown, then a hard stop).
 - [ ] **Compaction observability.** No way currently to ask the tree how many compactions are
       pending, how long the last one took, or how far behind compaction is — needed before this
       could be trusted operationally.
 - [ ] **Backoff on repeated compaction failure.** A compaction that fails (e.g. disk full) just
       fails again identically next time `flush()` triggers one — no circuit breaker.
+
+**Beyond T7.6 — consistency model & lock-free reads** (new capabilities, not required by any
+existing AC; found by asking what consistency guarantees this tree actually offers today):
+
+- [ ] **In progress — Persistent (immutable, structurally-shared) memTable tree.** Replace
+      in-place RBT mutation with path-copying: each `put()` produces a new root sharing every
+      untouched subtree with the old one (only the O(log n) nodes on the insertion path get
+      copied), published via an `AtomicReference<Node<K,V>>` swap — the same pattern already used
+      for `segments`. Removes the need for `get()`/`scan()`'s brief `synchronized` block around
+      the memTable read entirely — genuinely lock-free memTable reads, and old tree versions stay
+      valid and untouched for as long as anything still references them. Foundational for the
+      MVCC snapshot item below, not just a standalone cleanup.
+- [ ] **MVCC snapshot isolation for `scan()`.** Confirmed real via a concrete concurrent probe,
+      not hypothetical: `scan()` currently reads `segments` and `memTable` as two *separately*
+      captured views, not one atomic snapshot. A key can fall into the gap between an in-flight
+      `flush()`'s segment-swap and its memTable-clear and vanish from that one scan entirely, even
+      though it existed continuously from the writer's perspective — a genuine lost read, not a
+      crash or corrupted value. Fix: capture one sequence-number ceiling (`eventCounter`'s current
+      value) at the start of a scan, filter every source (memTable + every segment) to
+      `id <= ceiling`. Needs compaction to track the oldest sequence number any open snapshot
+      still needs and never discard a version newer than that, even when a newer version of the
+      same key already exists elsewhere.
+- [ ] **Group commit (batched WAL writes).** Every `put()` currently pays for its own WAL append
+      + `fsync` under the single global writer lock. RocksDB's `WriteThread` pattern: one thread
+      becomes a leader, batches up whatever other writers are waiting, and does one combined WAL
+      write + one `fsync` for all of them before releasing everyone. A pure write-path throughput
+      optimization, independent of the other two items in this group.
 
 ---
 
