@@ -211,7 +211,11 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
             cursors.add(this.ssTable.rangeCursor(segment.getDataFile(),segment.getLoadedIndex(), this.codec.encodeKey(low), this.codec.encodeKey(high)));
         }
 
-        cursors.add(this.ssTable.memTableCursor(this.memTable.range(low, high)));
+        List<Entry<K, Value>> memTableEntries;
+        synchronized (this) {
+            memTableEntries = this.memTable.range(low, high);
+        }
+        cursors.add(this.ssTable.memTableCursor(memTableEntries));
 
         return new MergeCursor<>(cursors);
     }
