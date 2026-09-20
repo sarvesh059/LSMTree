@@ -103,7 +103,7 @@ exist to have something to measure, and should reflect the final, concurrent-saf
       newest wins; tombstones omitted; correct across segment boundaries.
 - [x] **T7.3 Compaction strategy (size-tiered or leveled).** AC: define the trigger and
       show its write- vs read/space-amplification behavior on a workload.
-- [ ] **T7.6 Concurrent access safety.** Currently zero synchronization anywhere
+- [x] **T7.6 Concurrent access safety.** Currently zero synchronization anywhere
       (`RBT`/`MemTable` mutation, the `memTable` field swap on flush, WAL/Manifest file
       writes, `segments` list mutation) — built and tested single-threaded only. AC:
       concurrent `put`/`get`/`flush` from multiple threads never corrupts the RBT

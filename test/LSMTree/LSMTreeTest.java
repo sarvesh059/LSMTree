@@ -544,4 +544,40 @@ public class LSMTreeTest {
         }
     }
 
+    @Test
+    void sharedCompactionLogicRespectsPassedSelectionNotLiveSegments() throws IOException {
+        try (LSMTree<Integer> tree = newTreeWithCompactionThreshold(dataDir.resolve("dead-param"), Integer.MAX_VALUE)) {
+            tree.put(1, singleByteValue(1));
+            tree.flush();
+            tree.put(2, singleByteValue(2));
+            tree.flush();
+
+            assertEquals(2, tree.segmentCount(), "sanity check: two segments exist before the call");
+
+            tree.sharedCompactionLogic(List.of());
+
+            assertEquals(3, tree.segmentCount(),
+                    "an empty selection must be respected -- nothing removed, one (empty) merged segment added -- " +
+                            "not silently re-derived from live segments");
+        }
+    }
+
+    @Test
+    void reopeningTreeWithQualifyingRecoveredSegmentsTriggersCompactionAutomatically() throws IOException, InterruptedException {
+        Path dir = dataDir.resolve("recover-triggers-compaction");
+        try (LSMTree<Integer> firstSession = new LSMTree<>(new IntegerKeyCodec(), dir, SAMPLE_EVERY, THRESHOLD,
+                new FullCompactStrategy<>(1000), new FullLoadMergeStrategy<>(new IntegerKeyCodec()))) {
+            for (int i = 1; i <= 8; i++) firstSession.put(i, singleByteValue(i));
+            assertTrue(firstSession.segmentCount() >= 2, "sanity check: first session left multiple uncompacted segments on disk");
+        }
+
+        try (LSMTree<Integer> secondSession = new LSMTree<>(new IntegerKeyCodec(), dir, SAMPLE_EVERY, THRESHOLD,
+                new FullCompactStrategy<>(2), new FullLoadMergeStrategy<>(new IntegerKeyCodec()))) {
+            secondSession.awaitCompaction();
+
+            assertEquals(1, secondSession.segmentCount(),
+                    "recovering segments that already qualify for compaction should trigger it automatically, without any put()");
+        }
+    }
+
 }
