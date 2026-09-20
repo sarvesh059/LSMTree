@@ -456,3 +456,56 @@ single workload shape, single seed, single set of strategy parameters
 `compactionThreshold=10` for full compaction) — different parameter choices would shift the exact
 ratios, though not the qualitative direction of the trade-off, which follows directly from each
 strategy's structure rather than from these specific numbers.
+
+---
+
+## 10. Concurrency baseline, pre-persistent-tree
+
+Captured immediately before starting the persistent (structurally-shared, lock-free) memTable
+tree rewrite, specifically to have a real "before" to diff against once it lands. New harness:
+`bench/LSMTree/ConcurrencyBenchmark.java` — fixed total op count (50,000) split across a swept
+thread count (1/2/4/8/16), each thread with its own seeded RNG/Zipfian generator to avoid a
+shared-RNG confound, measuring aggregate wall-clock throughput. Two workload shapes: write-heavy
+(50% read / 50% update, Zipfian) and read-only (100% read, Zipfian) — the second specifically to
+isolate reader-vs-reader contention with zero writers involved.
+
+### Results
+
+```
+Write-heavy (50% read / 50% update, Zipfian)
+  threads= 1  totalOps=50000  elapsed=6334ms   ops/sec=7894
+  threads= 2  totalOps=50000  elapsed=4619ms   ops/sec=10826
+  threads= 4  totalOps=50000  elapsed=5263ms   ops/sec=9500
+  threads= 8  totalOps=50000  elapsed=10186ms  ops/sec=4909
+  threads=16  totalOps=50000  elapsed=12313ms  ops/sec=4061
+
+Read-only (100% read, Zipfian)
+  threads= 1  totalOps=50000  elapsed=2342ms  ops/sec=21349
+  threads= 2  totalOps=50000  elapsed=1773ms  ops/sec=28202
+  threads= 4  totalOps=50000  elapsed=2010ms  ops/sec=24870
+  threads= 8  totalOps=50000  elapsed=2691ms  ops/sec=18582
+  threads=16  totalOps=50000  elapsed=2790ms  ops/sec=17920
+```
+
+### Findings
+
+- **Both workloads peak at 2 threads, then collapse.** Write-heavy: 7,894 → 10,826 (+37%) at 2
+  threads, then down to 9,500, 4,909, 4,061 — 16 threads does *less* useful work per second than
+  a single thread. Classic lock-contention thrashing: past a small amount of parallelism, adding
+  threads adds pure contention overhead with no additional throughput.
+- **Read-only shows the same collapse (28,202 → 17,920 from 2 to 16 threads) despite zero
+  writers.** This is the important number — it proves the bottleneck isn't write serialization
+  specifically, it's that *every* `get()` call, even in a workload with no writes at all,
+  contends with every other concurrent `get()` on `get()`'s brief `synchronized(this)` memTable
+  check. Pure readers are already fighting each other for a lock today.
+- This gives a concrete target for the persistent-tree work: once memTable reads need no lock at
+  all, the read-only workload in particular should scale close to linearly with thread count
+  (bounded by actual CPU/cores and I/O, not artificial serialization) instead of collapsing past
+  2 threads the way it does now.
+
+### Caveats
+
+Single machine, single run per thread-count point, no JMH warmup control — same caveats as every
+other benchmark in this document. `TOTAL_OPS=50,000` fixed across all thread counts (so more
+threads means less work per thread, not more total work) — chosen to isolate scaling behavior,
+not to represent a realistic sustained load.
