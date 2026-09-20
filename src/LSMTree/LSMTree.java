@@ -289,6 +289,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
             } catch (ExecutionException e) {
                 throw new RuntimeException(e);
             }
+            if (!this.compactionInProgress) return;
         }
     }
 
