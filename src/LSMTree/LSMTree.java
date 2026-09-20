@@ -101,11 +101,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         this.wal.reset();
         this.memTable = new MemTable<>(this.memTableThreshold);
 
-        if (this.compactionStrategy.shouldCompact(this.segments.get()) && !compactionInProgress){
-            List<Segment<K>> selectedSegments = this.compactionStrategy.select(this.segments.get());
-            this.compactionInProgress = true;
-            compactionExecutor.submit(() -> runCompactionAsync(selectedSegments));
-        }
+        checkAndCompactAsync();
     }
 
     public synchronized void put(K key, Value value) throws IOException {
@@ -185,6 +181,16 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
 
         maxEventId = Math.max(maxEventId, this.wal.getLatestEventId());
         this.eventCounter.set(maxEventId);
+
+        checkAndCompactAsync();
+    }
+
+    private void checkAndCompactAsync(){
+        if (this.compactionStrategy.shouldCompact(this.segments.get()) && !compactionInProgress){
+            List<Segment<K>> selectedSegments = this.compactionStrategy.select(this.segments.get());
+            this.compactionInProgress = true;
+            compactionExecutor.submit(() -> runCompactionAsync(selectedSegments));
+        }
     }
 
     private void cleanUp() throws IOException {
