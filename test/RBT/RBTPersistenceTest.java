@@ -50,14 +50,14 @@ public class RBTPersistenceTest {
     @DisplayName("Persistence: an old root, once returned, is never mutated by any later insert")
     void oldRootStaysStructurallyUnchangedAfterSubsequentInserts() {
         for (int seed = 0; seed < 3; seed++) {
-            RBT<Integer, String> tree = new RBT<>();
+            RBT<Integer, String> tree = new RBT<Integer, String>();
             Random rng = new Random(seed * 17 + 3);
             int n = 5000;
 
             for (int i = 0; i < n; i++) {
                 int key = rng.nextInt(2000);
 
-                Node<Integer, String> oldRoot = tree.root;
+                Node<Integer, String> oldRoot = tree.root.get();
                 Map<Node<Integer, String>, Fingerprint> before = fingerprint(oldRoot, new IdentityHashMap<>());
 
                 tree.insert(key, "v" + seed + "_" + i);
@@ -82,7 +82,7 @@ public class RBTPersistenceTest {
     @Test
     @DisplayName("Persistence: multiple retained versions all stay valid, even long after later inserts")
     void manyRetainedOldVersionsAllStayValidAfterFurtherInserts() {
-        RBT<Integer, String> tree = new RBT<>();
+        RBT<Integer, String> tree = new RBT<Integer, String>();
         Random rng = new Random(99);
         int n = 6000;
 
@@ -92,7 +92,7 @@ public class RBTPersistenceTest {
         for (int i = 0; i < n; i++) {
             tree.insert(rng.nextInt(2500), "v" + i);
             if (i % 200 == 0) {
-                checkpoints.add(new Checkpoint(tree.root, collectInOrder(tree.root)));
+                checkpoints.add(new Checkpoint(tree.root.get(), collectInOrder(tree.root.get())));
             }
         }
 
@@ -111,14 +111,14 @@ public class RBTPersistenceTest {
         // actual content of "structural sharing" is an aggregate property: an insert should only
         // ever clone the O(log n) nodes on its own path (plus, at most, their immediate siblings
         // via a rotation or flipColors) -- never a number of nodes proportional to the whole tree.
-        RBT<Integer, String> tree = new RBT<>();
+        RBT<Integer, String> tree = new RBT<Integer, String>();
         Random rng = new Random(11);
         int warmup = 3000;
         for (int i = 0; i < warmup; i++) tree.insert(rng.nextInt(2000), "warmup" + i);
 
         int sampleInserts = 500;
         for (int i = 0; i < sampleInserts; i++) {
-            Node<Integer, String> oldRoot = tree.root;
+            Node<Integer, String> oldRoot = tree.root.get();
             int nodeCountBefore = collectInOrder(oldRoot).size();
             Map<Node<Integer, String>, Fingerprint> before = fingerprint(oldRoot, new IdentityHashMap<>());
 
@@ -147,7 +147,7 @@ public class RBTPersistenceTest {
     @Test
     @DisplayName("Persistence: concurrent readers holding a published root never observe a torn/mutated tree")
     void concurrentReadersNeverObserveMutationOfPublishedSnapshot() throws InterruptedException {
-        RBT<Integer, String> tree = new RBT<>();
+        RBT<Integer, String> tree = new RBT<Integer, String>();
         AtomicReference<Node<Integer, String>> published = new AtomicReference<>(null);
         AtomicBoolean writerDone = new AtomicBoolean(false);
         AtomicReference<Throwable> failure = new AtomicReference<>();
@@ -161,7 +161,7 @@ public class RBTPersistenceTest {
                     int key = rng.nextInt(5000);
                     tree.insert(key, "v" + i);
                     distinctKeysWritten.add(key);
-                    published.set(tree.root);
+                    published.set(tree.root.get());
                 }
             } finally {
                 writerDone.set(true);

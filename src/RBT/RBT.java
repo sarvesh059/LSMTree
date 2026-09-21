@@ -2,15 +2,16 @@ package RBT;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 public class RBT<K extends Comparable<K>,V> {
 
-    Node<K,V> root;
+    AtomicReference<Node<K,V>> root;
     private int size;
 
     public RBT(){
-        this.root = null;
+        this.root = new AtomicReference<>(null);
         this.size = 0;
     }
 
@@ -21,7 +22,7 @@ public class RBT<K extends Comparable<K>,V> {
     }
 
     private Node<K,V> searchNode(K key){
-        Node<K,V> parent = this.root;
+        Node<K,V> parent = this.root.get();
         while(parent != null){
             int res = parent.getKey().compareTo(key);
             if(res < 0){
@@ -43,7 +44,7 @@ public class RBT<K extends Comparable<K>,V> {
 
     public List<K> inOrderKeys(){
         List<Entry<K,V>> entries = new ArrayList<>();
-        inOrderEntries(this.root, entries);
+        inOrderEntries(this.root.get(), entries);
 
         return entries.stream()
                 .map(Entry::getKey)
@@ -51,8 +52,11 @@ public class RBT<K extends Comparable<K>,V> {
     }
 
     public void insert(K key, V value){
-        this.root = insertNode(this.root, key, value);
-        this.root.makeNodeBlack();
+        this.root.updateAndGet((current) -> {
+            Node<K,V> newRoot = insertNode(current, key, value);
+            newRoot.makeNodeBlack();
+            return newRoot;
+        });
     }
 
     private Node<K,V> insertNode(Node<K,V> parent, K key, V value){
@@ -144,7 +148,7 @@ public class RBT<K extends Comparable<K>,V> {
 
     public List<Entry<K, V>> rangeEntries(K low, K high){
         List<Entry<K, V>> list = new ArrayList<>();
-        range(this.root, low, high, list);
+        range(this.root.get(), low, high, list);
         return list;
     }
 
@@ -170,7 +174,7 @@ public class RBT<K extends Comparable<K>,V> {
 
     public K floor(K key){
         Node<K,V> low = null;
-        Node<K,V> curr = this.root;
+        Node<K,V> curr = this.root.get();
         while(curr != null){
             int res = curr.getKey().compareTo(key);
             if(res == 0) return key;
@@ -187,7 +191,7 @@ public class RBT<K extends Comparable<K>,V> {
 
     public K ceiling(K key){
         Node<K,V> high = null;
-        Node<K,V> curr = this.root;
+        Node<K,V> curr = this.root.get();
         while(curr != null){
             int res = curr.getKey().compareTo(key);
             if(res == 0) return key;
@@ -223,11 +227,14 @@ public class RBT<K extends Comparable<K>,V> {
 
     //Note: Not used in application, just implemented it out of curiosity
     public void delete(K key){
-        if(this.root == null || !searchNode(key).getKey().equals(key)) return;
 
-        if(root.isLeftChildBlack() && root.isRightChildBlack()) root.makeNodeRed();
-        root = delete(root, key);
-        if(root != null) root.makeNodeBlack();
+        this.root.updateAndGet((current) -> {
+            if(current == null || !searchNode(key).getKey().equals(key)) return current;
+            if(current.isLeftChildBlack() && current.isRightChildBlack()) current.makeNodeRed();
+            Node<K,V> newRoot = delete(current, key);
+            if(newRoot != null) newRoot.makeNodeBlack();
+            return newRoot;
+        });
     }
 
     Node<K,V> delete(Node<K,V> node, K key){
@@ -274,7 +281,7 @@ public class RBT<K extends Comparable<K>,V> {
 
     public List<Entry<K,V>> entries(){
         List<Entry<K,V>> list = new ArrayList<>();
-        inOrderEntries(root, list);
+        inOrderEntries(this.root.get(), list);
         return list;
     }
 

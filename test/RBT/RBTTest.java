@@ -143,7 +143,7 @@ public class RBTTest {
         for(int k : keys) tree.insert(k, "v" + k);
 
         //Assert
-        Node<Integer, String> root = tree.root;
+        Node<Integer, String> root = tree.root.get();
         List<Integer> inOrderKeys = tree.inOrderKeys();
         int measuredHeight = height(root);
         double heightBound = 2 * (Math.log(n+1)/Math.log(2));
@@ -337,7 +337,7 @@ public class RBTTest {
         }
 
         // Act
-        Node<Integer,String> root = tree.root;
+        Node<Integer,String> root = tree.root.get();
         List<Integer> inOrder = tree.inOrderKeys();
 
         // Assert
