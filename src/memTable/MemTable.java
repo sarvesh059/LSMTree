@@ -4,25 +4,23 @@ import RBT.*;
 import core.Value;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class MemTable<K extends Comparable<K>> {
     private final RBT<K, Value> tree;
-    private int sizeInBytes;
+    private final AtomicInteger sizeInBytes;
     private final int threshold;
 
     public MemTable(int threshold){
         this.tree = new RBT<K, Value>();
-        this.sizeInBytes = 0;
+        this.sizeInBytes = new AtomicInteger(0);
         this.threshold = threshold;
     }
 
-    public void put(K key, Value value){
-        Value oldVal = get(key);
-        int oldSize = oldVal != null ? oldVal.getSizeInBytes() : 0;
-        int newSize = value.getSizeInBytes();
+    public void put(K key, Value newValue){
 
-        this.sizeInBytes += (newSize - oldSize);
-        this.tree.insert(key, value);
+        Value oldValue = this.tree.insert(key, newValue);
+        this.sizeInBytes.addAndGet(oldValue!= null ? newValue.getSizeInBytes() - oldValue.getSizeInBytes(): newValue.getSizeInBytes());
     }
 
     public void delete(K key){
@@ -43,10 +41,10 @@ public class MemTable<K extends Comparable<K>> {
     }
 
     public boolean isFull(){
-        return this.sizeInBytes >= this.threshold;
+        return this.sizeInBytes.get() >= this.threshold;
     }
 
     public int getSizeInBytes(){
-        return this.sizeInBytes;
+        return this.sizeInBytes.get();
     }
 }

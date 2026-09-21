@@ -51,34 +51,42 @@ public class RBT<K extends Comparable<K>,V> {
                 .collect(Collectors.toList());
     }
 
-    public void insert(K key, V value){
+    public V insert(K key, V value){
+        AtomicReference<V> val = new AtomicReference<>();
         this.root.updateAndGet((current) -> {
-            Node<K,V> newRoot = insertNode(current, key, value);
+            InsertResponse<K, V> response = insertNode(current, key, value);
+            val.set(response.getValue());
+            Node<K,V> newRoot = response.getNode();
             newRoot.makeNodeBlack();
             return newRoot;
         });
+        return val.get();
     }
 
-    private Node<K,V> insertNode(Node<K,V> parent, K key, V value){
+    private InsertResponse<K,V> insertNode(Node<K,V> parent, K key, V value){
         if(parent == null){
             Node<K,V> newNode = new Node<>(key, value);
             this.size++;
-            return newNode;
+            return new InsertResponse<K, V>(newNode, null);
         }
 
         int res = parent.getKey().compareTo(key);
         Node<K,V> newNode = parent.clone();
+        InsertResponse<K, V> response = new InsertResponse<K, V>(null, null);
         if(res == 0){
-
+            response.setValue(newNode.getVal());
             newNode.setVal(value);
         }else if(res > 0){
-            newNode.setLeft(insertNode(newNode.getLeft(), key, value));
+            response = insertNode(newNode.getLeft(), key, value);
+            newNode.setLeft(response.getNode());
         }else{
-            newNode.setRight(insertNode(newNode.getRight(), key, value));
+            response = insertNode(newNode.getRight(), key, value);
+            newNode.setRight(response.getNode());
         }
 
         newNode = fixUp(newNode);
-        return newNode;
+        response.setNode(newNode);
+        return response;
     }
 
     Node<K,V> fixUp(Node<K,V> node){
