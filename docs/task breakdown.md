@@ -176,18 +176,23 @@ ground T7.6 already covers, taken further than its written AC required):
 **Beyond T7.6 — consistency model & lock-free reads** (new capabilities, not required by any
 existing AC; found by asking what consistency guarantees this tree actually offers today):
 
-- [ ] **In progress — Persistent (immutable, structurally-shared) memTable tree.** Replace
-      in-place RBT mutation with path-copying: each `put()` produces a new root sharing every
-      untouched subtree with the old one (only the O(log n) nodes on the insertion path get
-      copied), published via an `AtomicReference<Node<K,V>>` swap — the same pattern already used
-      for `segments`. Removes the need for `get()`/`scan()`'s brief `synchronized` block around
-      the memTable read entirely — genuinely lock-free memTable reads, and old tree versions stay
-      valid and untouched for as long as anything still references them. Foundational for the
-      MVCC snapshot item below, not just a standalone cleanup. `RBT`/`Node` path-copying itself is
-      done (`clone()` + persistent `insertNode`/`rotateLeft`/`rotateRight`/`flipColors`, a real
-      corruption bug found and fixed along the way — rotations/flipColors were mutating shared,
-      un-cloned sibling nodes in place); wiring `MemTable` around `AtomicReference<Node<K,V>>` and
-      the accompanying persistence test suite are still open.
+- [x] **Persistent (immutable, structurally-shared) memTable tree.** In-place RBT mutation
+      replaced with path-copying: each `put()` produces a new root sharing every untouched subtree
+      with the old one (only the O(log n) nodes on the insertion path get copied), published via
+      `RBT`'s internal `AtomicReference<Node<K,V>>` swap — the same pattern already used for
+      `segments`. `get()`/`scan()`'s `synchronized` block around the memTable read is gone;
+      memTable reads are now genuinely lock-free, and old tree versions stay valid and untouched
+      for as long as anything still references them. Two real corruption/correctness bugs found
+      and fixed along the way, both with permanent regression tests: (1) rotations/`flipColors`
+      were mutating shared, un-cloned sibling nodes in place, corrupting older tree snapshots the
+      moment a rotation fired (`RBTPersistenceTest`); (2) `MemTable.put()`'s size accounting raced
+      under concurrent writers two separate ways — a same-key delta computed from a stale
+      pre-insert read (fixed by `RBT.insert()` atomically returning the value it replaced), and the
+      `sizeInBytes` counter update itself being a non-atomic `int +=` (fixed via `AtomicInteger`)
+      (`MemTableConcurrencyTest`). `put()` deliberately stays `synchronized` — confirmed via a
+      probe that `WAL.append()` has no internal thread-safety and silently corrupts under
+      concurrent writers, plus a separate found-but-unfixed race where a writer could land in a
+      memtable `flush()` has already retired. Foundational for the MVCC snapshot item below.
 - [ ] **Convert MemTable to a skip list.** A different, complementary rung on the same scalability
       ladder rather than a replacement for the item above: this is what RocksDB and LevelDB
       actually use for their memtable — a lock-free (or lightly-locked) skip list supporting a

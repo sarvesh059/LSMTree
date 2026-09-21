@@ -12,10 +12,16 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Baseline for the current locking model (synchronized put/flush/compact, brief-lock memTable
- * reads, AtomicReference segments) -- captured before the persistent-tree rewrite, specifically
- * to see how throughput scales (or doesn't) with concurrent thread count under the current
- * design. Re-run after the persistent tree lands and diff.
+ * Throughput under concurrent access, sweeping thread count, for the current locking model
+ * (synchronized put/flush/compact, lock-free memTable reads via the persistent RBT, AtomicReference
+ * segments).
+ *
+ * IMPORTANT: the load phase calls {@code awaitCompaction()} after its final flush, so every run
+ * starts the timed concurrent phase with a settled, fully-compacted segment count (not whatever
+ * async compaction happened to have reached). Without this, segment count at the start of the
+ * concurrent phase is non-deterministic (observed anywhere from 1 to 175+ segments across runs),
+ * which dominates get() cost far more than any lock and makes thread-count comparisons meaningless
+ * -- this was found and fixed after discovering it had silently confounded an earlier baseline.
  *
  *   javac -d out -cp "lib/*" $(find src -name "*.java")
  *   javac -d out -cp out $(find bench -name "*.java")
@@ -46,6 +52,7 @@ public class ConcurrencyBenchmark {
         Random loadRng = new Random(42);
         for (int i = 0; i < KEY_SPACE; i++) tree.put(i, randomValue(loadRng));
         tree.flush();
+        tree.awaitCompaction(); // settle segment count before timing -- see class javadoc
 
         int opsPerThread = TOTAL_OPS / threadCount;
         Thread[] threads = new Thread[threadCount];

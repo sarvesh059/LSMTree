@@ -509,3 +509,72 @@ Single machine, single run per thread-count point, no JMH warmup control — sam
 other benchmark in this document. `TOTAL_OPS=50,000` fixed across all thread counts (so more
 threads means less work per thread, not more total work) — chosen to isolate scaling behavior,
 not to represent a realistic sustained load.
+
+**Methodological gap found later (see §11): this baseline's load phase never called
+`awaitCompaction()`, so the segment count feeding the concurrent phase was non-deterministic
+(observed anywhere from 1 to 175+ segments depending on how far async compaction had gotten) —
+that dominates `get()` cost far more than any lock does, which means the "reader-vs-reader lock
+contention" conclusion above was never actually isolated from this confound. §11 redoes this with
+the confound controlled.**
+
+## 11. Concurrency, post-persistent-tree (re-run with segment count controlled)
+
+Re-run after the persistent memTable tree landed (`get()`/`scan()`'s `synchronized` block around
+the memTable read removed; `put()` deliberately kept `synchronized` — see the task breakdown for
+why). Same harness, `bench/LSMTree/ConcurrencyBenchmark.java`, with one fix: the load phase now
+calls `tree.awaitCompaction()` after its final `flush()`, so every run starts the timed concurrent
+phase with a settled, fully-compacted segment count (1 segment) instead of whatever async
+compaction happened to have reached (observed 1–175+ segments across runs before this fix — see
+§10's caveat). Three consecutive runs, no other changes.
+
+### Results (three runs)
+
+```
+Write-heavy (50% read / 50% update, Zipfian)
+  threads    run1     run2     run3
+  1          8008     7595     8071
+  2         10882    11000    10911
+  4          9488     9274     9227
+  8          5014     5260     4983
+  16         4090     4051     3995
+
+Read-only (100% read, Zipfian)
+  threads    run1     run2     run3
+  1         23930    23618    23909
+  2         30716    29706    29540
+  4         40749    38964    42409
+  8         20335    18933    20459
+  16        19663    18680    19926
+```
+
+### Findings
+
+- **Write-heavy is essentially unchanged from §10** (peaks ~10,900 at 2 threads, same collapse
+  shape past that). Expected and correct: `put()` is still `synchronized`, deliberately — every
+  update in this workload still serializes on that lock regardless of what the memTable itself can
+  do internally. This workload was never going to show the memTable-lock fix; it isn't exercising
+  it.
+- **Read-only at 4 threads is the real signal: 40,700 ops/sec average, vs. §10's 24,870 —
+  a ~64% improvement**, and clearly outside run-to-run noise (38,964–42,409 across three runs).
+  This is the regime where the fix should show up (comfortably within the machine's 8-core budget,
+  enough threads for contention to matter) and it does.
+- **8 and 16 threads still collapse, but this machine has exactly 8 physical/logical cores**
+  (`sysctl hw.physicalcpu`/`hw.logicalcpu` both report 8). At 8 application threads plus the JVM's
+  own GC/JIT threads, the process is already oversubscribed; at 16 it's 2x oversubscribed. That
+  ceiling is hardware, not `LSMTree` — no amount of lock removal in this codebase can move it. The
+  honest reading is: the fix helped exactly where it could (below the core count), and the
+  remaining collapse at/above the core count is a property of the test machine, not evidence the
+  fix didn't work.
+- Confirmed via a scratch A/B test that the plain non-atomic `getCallCount`/`segmentsConsultedCount`
+  diagnostic counters in `LSMTree.get()` are **not** a meaningful contributor to the collapse
+  (numbers were statistically indistinguishable with them compiled out) — ruled out before
+  settling on the segment-count confound as the actual explanation.
+
+### Caveats
+
+Same single-machine, no-JMH-warmup caveats as §10. Only 3 runs, not a large statistical sample —
+the 4-thread read-only improvement is large and consistent enough across those 3 runs to trust,
+but this isn't a rigorous statistical comparison. Thread counts {8, 16} on an 8-core machine
+conflate "lock contention" with "hardware oversubscription" by construction — a cleaner follow-up
+would either cap the sweep at the core count or explicitly frame the high end as an oversubscription
+study rather than a lock-contention one.
