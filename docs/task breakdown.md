@@ -183,7 +183,23 @@ existing AC; found by asking what consistency guarantees this tree actually offe
       for `segments`. Removes the need for `get()`/`scan()`'s brief `synchronized` block around
       the memTable read entirely — genuinely lock-free memTable reads, and old tree versions stay
       valid and untouched for as long as anything still references them. Foundational for the
-      MVCC snapshot item below, not just a standalone cleanup.
+      MVCC snapshot item below, not just a standalone cleanup. `RBT`/`Node` path-copying itself is
+      done (`clone()` + persistent `insertNode`/`rotateLeft`/`rotateRight`/`flipColors`, a real
+      corruption bug found and fixed along the way — rotations/flipColors were mutating shared,
+      un-cloned sibling nodes in place); wiring `MemTable` around `AtomicReference<Node<K,V>>` and
+      the accompanying persistence test suite are still open.
+- [ ] **Convert MemTable to a skip list.** A different, complementary rung on the same scalability
+      ladder rather than a replacement for the item above: this is what RocksDB and LevelDB
+      actually use for their memtable — a lock-free (or lightly-locked) skip list supporting a
+      single writer with concurrent lock-free readers via careful memory-ordering (`volatile`/CAS
+      on forward pointers), without full path-copying or per-write snapshot versions. Expected
+      O(log n) search/insert like the RBT, but simpler concurrent-write support and no rebalancing
+      (no rotations/recoloring at all — a skip list keeps its expected balance probabilistically,
+      via randomized node height, instead of rigid invariants). Worth doing specifically to compare
+      against the persistent-RBT path: skip list trades away per-write MVCC snapshots (a skip list
+      mutated in place can't cheaply hand out "the tree as of sequence N" the way path-copying can)
+      for less allocation churn and a simpler concurrency story — a genuine, real production
+      trade-off between the two designs, not just "which is faster."
 - [ ] **MVCC snapshot isolation for `scan()`.** Confirmed real via a concrete concurrent probe,
       not hypothetical: `scan()` currently reads `segments` and `memTable` as two *separately*
       captured views, not one atomic snapshot. A key can fall into the gap between an in-flight
