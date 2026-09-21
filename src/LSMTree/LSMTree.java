@@ -116,10 +116,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
     public Value get(K key) throws IOException {
         this.getCallCount++;
 
-        Value value = null;
-        synchronized (this){
-            value = this.memTable.get(key);
-        }
+        Value value = this.memTable.get(key);
         if (value != null) return value;
 
         List<Segment<K>> segmentsSnapshot = this.segments.get();
@@ -201,7 +198,6 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
     }
 
     synchronized void compact() throws IOException {
-        File manifestFile = manifestFile();
         List<Segment<K>> selectedSegments = this.compactionStrategy.select(this.segments.get());
         this.sharedCompactionLogic(selectedSegments);
     }
@@ -268,10 +264,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
             cursors.add(this.ssTable.rangeCursor(segment.getDataFile(),segment.getLoadedIndex(), this.codec.encodeKey(low), this.codec.encodeKey(high)));
         }
 
-        List<Entry<K, Value>> memTableEntries;
-        synchronized (this) {
-            memTableEntries = this.memTable.range(low, high);
-        }
+        List<Entry<K, Value>> memTableEntries = this.memTable.range(low, high);;
         cursors.add(this.ssTable.memTableCursor(memTableEntries));
 
         return new MergeCursor<>(cursors);
