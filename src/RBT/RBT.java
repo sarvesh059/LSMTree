@@ -63,16 +63,18 @@ public class RBT<K extends Comparable<K>,V> {
         }
 
         int res = parent.getKey().compareTo(key);
+        Node<K,V> newNode = parent.clone();
         if(res == 0){
-            parent.setVal(value);
+
+            newNode.setVal(value);
         }else if(res > 0){
-            parent.setLeft(insertNode(parent.getLeft(), key, value));
+            newNode.setLeft(insertNode(newNode.getLeft(), key, value));
         }else{
-            parent.setRight(insertNode(parent.getRight(), key, value));
+            newNode.setRight(insertNode(newNode.getRight(), key, value));
         }
 
-        parent = fixUp(parent);
-        return parent;
+        newNode = fixUp(newNode);
+        return newNode;
     }
 
     Node<K,V> fixUp(Node<K,V> node){
@@ -94,30 +96,41 @@ public class RBT<K extends Comparable<K>,V> {
     public void flipColors(Node<K,V> node){
         if(node == null) return;
         node.flipColor();
-        if(node.getLeft() != null) node.getLeft().flipColor();
-        if(node.getRight() != null) node.getRight().flipColor();
+        if(node.getLeft() != null){
+            Node<K,V> newLeft = node.getLeft().clone();
+            newLeft.flipColor();
+            node.setLeft(newLeft);
+        }
+        if(node.getRight() != null){
+            Node<K,V> newRight = node.getRight().clone();
+            newRight.flipColor();
+            node.setRight(newRight);
+        }
     }
 
     Node<K,V> rotateRight(Node<K,V> node){
         Node<K,V> left = node.getLeft();
         if(left == null) return node;
 
-        node.setLeft(left.getRight());
-        left.setRight(node);
+        Node<K,V> newLeft = left.clone();
+        node.setLeft(newLeft.getRight());
+        newLeft.setRight(node);
 
-        swapColor(node, left);
-        return left;
+        swapColor(node, newLeft);
+        return newLeft;
     }
 
     Node<K,V> rotateLeft(Node<K,V> node){
         Node<K,V> right = node.getRight();
         if(right == null) return node;
 
-        node.setRight(right.getLeft());
-        right.setLeft(node);
+        Node<K,V> newRight = right.clone();
 
-        swapColor(node, right);
-        return right;
+        node.setRight(newRight.getLeft());
+        newRight.setLeft(node);
+
+        swapColor(node, newRight);
+        return newRight;
     }
 
     void swapColor(Node<K, V> node1, Node<K, V> node2){
@@ -208,6 +221,7 @@ public class RBT<K extends Comparable<K>,V> {
         return node;
     }
 
+    //Note: Not used in application, just implemented it out of curiosity
     public void delete(K key){
         if(this.root == null || !searchNode(key).getKey().equals(key)) return;
 

@@ -89,27 +89,32 @@ public class RBTTest {
     }
 
     @Test
-    @DisplayName("T1.2: rotateLeft then matching rotateRight returns the identical tree")
+    @DisplayName("T1.2: rotateLeft then matching rotateRight restores the identical tree structure")
     void rotateLeftThenRotateRightRestoresOriginalTree(){
         //Arrange
         Node<Integer, String> q = buildRotationFixture();
-        Node<Integer, String> a = q.getLeft();
-        Node<Integer, String> x = q.getRight();
-        Node<Integer, String> b = x.getLeft();
-        Node<Integer, String> c = x.getRight();
 
         //Act
         Node<Integer, String> afterLeft = tree.rotateLeft(q);
         Node<Integer, String> restored = tree.rotateRight(afterLeft);
 
         //Assert
-        assertAll("round trip must reconstruct the exact original structure",
-                () -> assertSame(q, restored, "root should be back to q"),
-                () -> assertSame(a, restored.getLeft(), "q.left should be back to a"),
-                () -> assertSame(x, restored.getRight(), "q.right should be back to x"),
-                () -> assertSame(b, restored.getRight().getLeft(), "x.left should be back to b"),
-                () -> assertSame(c, restored.getRight().getRight(), "x.right should be back to c")
-        );
+        // rotateLeft/rotateRight are persistent: they clone the node being rotated into instead
+        // of mutating it in place (see RBT persistence work), so a round trip does NOT return the
+        // original node objects -- it returns fresh clones with the identical shape/keys/values/
+        // colors. Compare by value, not by reference. (Reference-sharing of untouched subtrees is
+        // covered separately by the persistence tests.)
+        Node<Integer, String> expected = buildRotationFixture();
+        assertTrue(structurallyEqual(expected, restored),
+                "round trip must reconstruct a tree with the identical shape, keys, values and colors");
+    }
+
+    private boolean structurallyEqual(Node<Integer, String> a, Node<Integer, String> b){
+        if(a == null || b == null) return a == b;
+        if(!Objects.equals(a.getKey(), b.getKey())) return false;
+        if(!Objects.equals(a.getVal(), b.getVal())) return false;
+        if(a.isRed() != b.isRed()) return false;
+        return structurallyEqual(a.getLeft(), b.getLeft()) && structurallyEqual(a.getRight(), b.getRight());
     }
 
     @Test

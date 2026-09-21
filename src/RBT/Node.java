@@ -76,4 +76,17 @@ public class Node<K,V> {
     public boolean isRightChildBlack(){
         return !isRightChildRed();
     }
+
+    public Node<K,V> clone(){
+        Node<K,V> node = new Node<>(this.key, this.val);
+        node.setLeft(this.left);
+        node.setRight(this.right);
+        if(this.isRed()){
+            node.makeNodeRed();
+        }else{
+            node.makeNodeBlack();
+        }
+
+        return node;
+    }
 }
