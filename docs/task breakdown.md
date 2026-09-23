@@ -140,21 +140,34 @@ exist to have something to measure, and should reflect the final, concurrent-saf
 
 ## Side Quests (optional, not required by any phase's AC)
 
-- [ ] **Leveled compaction strategy.** T7.3's AC was satisfied by size-tiered ("pick any"); this
-      is bonus scope, not required. Deliberately deferred until after T7.6 — building it first
-      would mean designing its range-overlap-aware trigger/select logic under single-threaded
-      assumptions, then needing to revisit it for concurrency safety once T7.6 lands: the exact
-      "redone after each subsequent feature" problem T7.6's own placement already exists to avoid.
-      Known building blocks, not yet a committed scope — decide the actual shape (minimal
-      `List<Segment<K>>`-widening vs. the fuller decoupled merge/write-strategy split; L0/L1-only
-      vs. full N-level) when this is actually picked up, not now: `MergeStrategy.merge()`'s return
-      type likely needs to widen to `List<Segment<K>>` (existing strategies would return a
-      singleton list); `Segment` likely needs `level` and `minKey`/`maxKey` fields, persisted in
-      the segment's own header (same principle as `maxEventId` — not duplicated into the
-      manifest); a `LeveledCompactionStrategy` for trigger/select (L0 segments overlap freely;
-      L1+ enforce non-overlap; selection via range-overlap checks using `compareEncoded`); a
-      `LeveledMergeStrategy` that reuses the existing merge machinery but partitions its output
-      into multiple segments instead of writing one.
+- [ ] **In progress — Leveled compaction strategy.** T7.3's AC was satisfied by size-tiered
+      ("pick any"); this is bonus scope, not required. Deliberately deferred until after T7.6 —
+      building it first would mean designing its range-overlap-aware trigger/select logic under
+      single-threaded assumptions, then needing to revisit it for concurrency safety once T7.6
+      lands. Scope committed (full N-level, real read-path payoff, not a toy):
+      - `Segment<K>` gains `level` (int) and `minKey`/`maxKey` fields, persisted in the segment's
+        own header (same principle as `maxEventId` — not duplicated into the manifest). Store
+        `minKey`/`maxKey` as encoded `byte[]`, ready for `compareEncoded` without re-encoding.
+      - `MergeStrategy.merge()`'s return type widens to `List<Segment<K>>` — existing strategies
+        (`FullLoadMergeStrategy`) return a singleton list.
+      - `LeveledMergeStrategy`: reuses the existing heap-merge cursor machinery, partitions output
+        across multiple files once a target-size-per-level is hit, tags each with its new `level`
+        and `minKey`/`maxKey`.
+      - `LeveledCompactionStrategy`: L0 triggers on segment **count** (segments can overlap —
+        RocksDB default 4); L1+ triggers on total **bytes** in the level, exponentially growing
+        per level (`Li target ≈ L1_target × 10^(i-1)`, RocksDB's level-multiplier convention).
+        Selection: L0 compaction grabs all L0 segments plus every L1 segment overlapping any of
+        them; Li→Li+1 (i≥1) picks **one** segment from Li via a per-level "compact pointer" that
+        rotates through the keyspace each time (so cold key ranges aren't starved), then merges in
+        every Li+1 segment whose range overlaps it. Compact pointer is in-memory only, resets on
+        restart — an accepted, named gap for now, same status as no-physical-deletion-yet.
+      - `flush()` tags newly-written segments `level=0`.
+      - **`get()`/`scan()` become level-aware** — this is the part that makes the whole thing real
+        rather than theoretical: without it, leveled compaction pays its write-amp cost with no
+        read-amp payoff to show for it, which would be strictly worse than what's already built.
+        L0 stays a bloom-filter-gated linear scan, newest-to-oldest, same as today (L0 segments
+        can overlap, so more than one may match). L1+ jumps straight to the *one* segment whose
+        `minKey`/`maxKey` range covers the target key, instead of scanning the level.
 
 **Deepening T7.6 toward production grade** (not new features — the same concurrency/async-compaction
 ground T7.6 already covers, taken further than its written AC required):

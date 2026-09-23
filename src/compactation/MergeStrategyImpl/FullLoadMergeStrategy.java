@@ -20,7 +20,7 @@ public class FullLoadMergeStrategy<K extends Comparable<K>> implements MergeStra
     }
 
     @Override
-    public Segment<K> merge(List<Segment<K>> segments, File dataFile, File indexFile, File bloomFilterFile, int sampleEvery) throws IOException {
+    public List<Segment<K>> merge(List<Segment<K>> segments, File dataFile, File indexFile, File bloomFilterFile, int sampleEvery) throws IOException {
         List<List<Entry<K, Value>>> entriesList = new ArrayList<>();
 
         SSTable<K> table = new SSTable<>(this.codec);
@@ -32,7 +32,7 @@ public class FullLoadMergeStrategy<K extends Comparable<K>> implements MergeStra
 
         List<Entry<K,Value>> updatedEntries = kWayMerge(entriesList);
 
-        return table.write(updatedEntries, dataFile, indexFile, bloomFilterFile, sampleEvery);
+        return List.of(table.write(updatedEntries, dataFile, indexFile, bloomFilterFile, sampleEvery));
     }
 
     List<Entry<K, Value>> kWayMerge(List<List<Entry<K, Value>>> entriesList){

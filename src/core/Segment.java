@@ -3,8 +3,6 @@ package core;
 import bloomFilter.BloomFilter;
 
 import java.io.File;
-import java.io.IOException;
-import java.io.RandomAccessFile;
 import java.util.List;
 
 public class Segment<K> {
@@ -13,6 +11,9 @@ public class Segment<K> {
     private final BloomFilter bloomFilter;
     private final int entryCount;
     private final long maxEventId;
+    private int level;
+    private byte[] minKey;
+    private byte[] maxKey;
 
 
     public Segment(File dataFile, List<IndexEntry> loadedIndex, BloomFilter bloomFilter, int entryCount, long maxEventId) {
@@ -37,6 +38,30 @@ public class Segment<K> {
 
     public int getEntryCount(){
         return this.entryCount;
+    }
+
+    public int getLevel() {
+        return level;
+    }
+
+    public void setLevel(int level) {
+        this.level = level;
+    }
+
+    public byte[] getMinKey() {
+        return minKey;
+    }
+
+    public void setMinKey(byte[] minKey) {
+        this.minKey = minKey;
+    }
+
+    public byte[] getMaxKey() {
+        return maxKey;
+    }
+
+    public void setMaxKey(byte[] maxKey) {
+        this.maxKey = maxKey;
     }
 
     public long getMaxEventId(){
