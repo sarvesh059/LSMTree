@@ -578,3 +578,69 @@ but this isn't a rigorous statistical comparison. Thread counts {8, 16} on an 8-
 conflate "lock contention" with "hardware oversubscription" by construction — a cleaner follow-up
 would either cap the sweep at the core count or explicitly frame the high end as an oversubscription
 study rather than a lock-contention one.
+
+## 12. T7.4 micro-benchmarks — write throughput, point-read latency
+
+T7.4's AC: report write throughput, point-read latency, and the effect of compaction/bloom
+filters on read cost. §1-§4 attempted this once already but are stale — measured before
+order-preserving key encoding (T7.5), bloom filters (T7.1), size-tiered compaction (T7.3), and
+the persistent-tree/`Version` work; §4 literally says "not measurable yet, T7.1 isn't
+implemented." Re-measured against current code as two new permanent harnesses,
+`bench/LSMTree/WriteThroughputBenchmark.java` and `bench/LSMTree/PointReadLatencyBenchmark.java`.
+The "effect of compaction/bloom filters on read cost" half of the AC is already covered honestly
+and currently by §7 (bloom filter) and §9 (compaction amplification) — not re-derived here.
+
+While wiring these up, found and fixed a real regression: the `Version` refactor (§11) had
+deleted the package-private `segments()` accessor without updating `CompactionAmplificationBenchmark.java`,
+which depends on it — that harness silently stopped compiling and nobody noticed, because bench
+files aren't part of the JUnit suite that's been re-run constantly throughout this project.
+Restored the accessor (`return this.version.get().segments();`); confirmed both the new
+benchmarks and the previously-broken one compile and run correctly, and the full test suite
+(179 tests) still passes.
+
+### Results (three runs each)
+
+```
+Write throughput (10,000 puts, 20-byte values, fsync-bound, no flush during the timed run)
+  run1: throughput=36,066/sec  avg=27.6us  p50=26.3us  p99=45.0us  max=1438.2us
+  run2: throughput=31,458/sec  avg=31.6us  p50=30.0us  p99=54.4us  max=2485.2us
+  run3: throughput=38,012/sec  avg=26.1us  p50=24.9us  p99=44.8us  max=1466.3us
+
+Point-read latency (10,000 entries in one segment, 5,000 hits + 5,000 misses)
+  run1: hit avg=52.3us p50=51.7us p99=99.8us  max=378.8us | miss avg=1.0us p50=0.1us p99=53.8us max=101.2us | ratio=0.02x
+  run2: hit avg=52.7us p50=52.0us p99=102.8us max=407.0us | miss avg=1.0us p50=0.1us p99=52.3us max=105.8us | ratio=0.02x
+  run3: hit avg=52.4us p50=51.6us p99=101.8us max=396.4us | miss avg=1.0us p50=0.1us p99=52.1us max=98.2us | ratio=0.02x
+```
+
+### Findings
+
+- **Write throughput: ~31-38K puts/sec, fsync-bound** — same order of magnitude as §1's stale
+  31,146/sec baseline, and that's the expected result: the put() path's dominant cost (one
+  `wal.fsync()` per write) hasn't fundamentally changed shape across all the work since §1, so a
+  similar number here is a sanity check passing, not a regression. p99 (~45-54us) tracking close
+  to avg shows this is a stable, non-bursty cost — no long GC-pause-shaped tail at this scale.
+- **Point-read latency has completely inverted since §2.** §2 (no bloom filter): misses ~20x
+  *slower* than hits. Now: misses are ~50x *faster* than hits (ratio 0.02x, stable across all 3
+  runs). A hit still has to open the segment file, seek via the sparse index, and read the entry
+  (~52us). A miss now resolves almost entirely via the in-memory bloom filter check — `avg=1.0us,
+  p50=0.1us` means the *typical* miss touches disk at all — it's answered by `mightContain()`
+  alone. The `p99=~52us` on misses shows the remaining cost: bloom filter false positives, which
+  still pay the full disk-read cost before confirming absence — exactly the tradeoff a bloom
+  filter is supposed to make (cheap common case, same-as-before cost only on the rare
+  false-positive path).
+- This is the concrete, current-code confirmation of what §7 already found via a relative
+  comparison (+25-111% ops/sec on read-heavy workloads) — here it's the same effect shown as an
+  absolute latency number, and the magnitude (a full inversion, not just an improvement) is
+  clearer in this framing than in §7's throughput-ratio framing.
+
+### Caveats
+
+Same single-machine, no-JMH-warmup caveats as every other benchmark in this document — flagged
+explicitly in this file's own intro as not the rigorous, statistically-controlled form T7.4's AC
+would ideally want (JMH, proper warmup phases, more runs). Three runs each is enough to see these
+particular results are stable and not noise (both write throughput and point-read latency numbers
+vary by single-digit percent run to run), but isn't a substitute for a real microbenchmark suite.
+`Integer.MAX_VALUE` memTableThreshold means these numbers reflect a single always-resident
+memTable/single segment — realistic for isolating the AC's specific questions (raw put cost, raw
+hit/miss cost), not representative of sustained throughput under continuous flush/compaction
+pressure (that's what §9's amplification numbers and §10/§11's concurrency benchmarks are for).

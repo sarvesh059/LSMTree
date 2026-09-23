@@ -126,8 +126,17 @@ exist to have something to measure, and should reflect the final, concurrent-saf
       properly, or an accepted documented gap for now). Compaction's snapshot of "which
       segments to merge" must be captured synchronously before submitting to the
       executor — the background task must never re-derive it from live `segments` state.
-- [ ] **T7.4 Micro-benchmarks.** AC: report write throughput, point-read latency, and the
-      effect of compaction / bloom filters on read cost.
+- [x] **T7.4 Micro-benchmarks.** AC: report write throughput, point-read latency, and the
+      effect of compaction / bloom filters on read cost. `docs/benchmark.md` §1-§4 attempted this
+      early but went stale (measured before T7.5/T7.1/T7.3/the `Version` work — §4 literally says
+      "not measurable yet"); §12 re-measures write throughput and point-read latency against
+      current code as two new permanent harnesses (`WriteThroughputBenchmark`,
+      `PointReadLatencyBenchmark`), and points at the already-current §7/§9 for the
+      compaction/bloom-filter-effect half rather than re-deriving it. Found and fixed a real
+      regression while wiring this up: the `Version` refactor had deleted the package-private
+      `segments()` accessor `CompactionAmplificationBenchmark.java` depends on, silently breaking
+      that harness's compile with nothing catching it (bench files aren't part of the JUnit suite)
+      — restored the accessor.
 
 ## Side Quests (optional, not required by any phase's AC)
 

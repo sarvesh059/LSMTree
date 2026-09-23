@@ -324,4 +324,8 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
     File manifestFile() {
         return this.dataDir.resolve(MANIFEST_FILE_NAME).toFile();
     }
+
+    List<Segment<K>> segments() {
+        return this.version.get().segments();
+    }
 }
