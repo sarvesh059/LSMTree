@@ -50,7 +50,7 @@ public class SSTableTest {
 
         List<Entry<Integer, Value>> inputEntries = List.of(realEntry, emptyEntry, tombStoneEntry);
 
-        ssTable.write(inputEntries, dataFile, indexFile, bloomFilterFile, 10);
+        ssTable.write(inputEntries, dataFile, indexFile, bloomFilterFile, 10, 0);
 
         List<Entry<Integer, Value>> outputEntries = ssTable.readAll(dataFile);
 
@@ -72,7 +72,7 @@ public class SSTableTest {
     @Test
     void emptyInputReturnsEmptyOutput() throws IOException {
         List<Entry<Integer, Value>> inputEntries = new ArrayList<>();
-        ssTable.write(inputEntries, dataFile, indexFile, bloomFilterFile, 10);
+        ssTable.write(inputEntries, dataFile, indexFile, bloomFilterFile, 10, 0);
 
         List<Entry<Integer, Value>> outputEntries = ssTable.readAll(dataFile);
 
@@ -99,7 +99,7 @@ public class SSTableTest {
     })
     void indexCountMatchesCeilingFormula(int n, int sampleEvery, int expectedIndexCount) throws IOException {
         List<Entry<Integer, Value>> entries = buildEntries(n);
-        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, sampleEvery);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, sampleEvery, 0);
 
         List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
 
@@ -123,7 +123,7 @@ public class SSTableTest {
     })
     void firstKeyIsAlwaysSampled(int n, int sampleEvery) throws IOException {
         List<Entry<Integer, Value>> entries = buildEntries(n);
-        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, sampleEvery);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, sampleEvery, 0);
 
         List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
 
@@ -139,7 +139,7 @@ public class SSTableTest {
     })
     void loadedOffsetSeeksCorrectKey(int n, int sampleEvery) throws IOException {
         List<Entry<Integer, Value>> entries = buildEntries(n);
-        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, sampleEvery);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, sampleEvery, 0);
 
         List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
 
@@ -158,7 +158,7 @@ public class SSTableTest {
     @Test
     void scanOnKeyBelowFirstReturnsAbsentWithZeroReads() throws IOException {
         List<Entry<Integer, Value>> entries = buildEntries(20);
-        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5, 0);
         List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
 
         SSTable.ScanResult<Value> result = ssTable.scan(-1, dataFile, loaded);
@@ -172,7 +172,7 @@ public class SSTableTest {
     @Test
     void scanOnExactSampleKeyReturnsValueOnFirstRead() throws IOException {
         List<Entry<Integer, Value>> entries = buildEntries(20);
-        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5, 0);
         List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
 
         SSTable.ScanResult<Value> result = ssTable.scan(5, dataFile, loaded);
@@ -187,7 +187,7 @@ public class SSTableTest {
     void scanOnKeyBetweenSamplesReturnsValueWithinBound() throws IOException {
         int sampleEvery = 5;
         List<Entry<Integer, Value>> entries = buildEntries(20);
-        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, sampleEvery);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, sampleEvery, 0);
         List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
 
         SSTable.ScanResult<Value> result = ssTable.scan(7, dataFile, loaded);
@@ -206,7 +206,7 @@ public class SSTableTest {
             entries.add(new Entry<>(i, Value.of(("v" + i).getBytes(StandardCharsets.UTF_8))));
         }
         int sampleEvery = 5;
-        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, sampleEvery);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, sampleEvery, 0);
         List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
 
         SSTable.ScanResult<Value> result = ssTable.scan(7, dataFile, loaded);
@@ -221,7 +221,7 @@ public class SSTableTest {
     void scanOnKeyAboveLastReturnsAbsentWithoutThrowing() throws IOException {
         int sampleEvery = 5;
         List<Entry<Integer, Value>> entries = buildEntries(20);
-        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, sampleEvery);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, sampleEvery, 0);
         List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
 
         SSTable.ScanResult<Value> result = ssTable.scan(999, dataFile, loaded);
@@ -237,7 +237,7 @@ public class SSTableTest {
         int sampleEvery = 5;
         List<Entry<Integer, Value>> entries = buildEntries(20);
         entries.set(12, new Entry<>(12, Value.tombstone()));
-        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, sampleEvery);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, sampleEvery, 0);
         List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
 
         SSTable.ScanResult<Value> result = ssTable.scan(12, dataFile, loaded);
@@ -259,7 +259,7 @@ public class SSTableTest {
     })
     void scanStaysBoundedAcrossConfigurations(int n, int sampleEvery, int targetEncodedKey) throws IOException {
         List<Entry<Integer, Value>> entries = buildEntries(n);
-        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, sampleEvery);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, sampleEvery, 0);
         List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
 
         SSTable.ScanResult<Value> result = ssTable.scan(targetEncodedKey, dataFile, loaded);
@@ -270,7 +270,7 @@ public class SSTableTest {
     @Test
     void getReturnsCorrectValueThroughPublicApi() throws IOException {
         List<Entry<Integer, Value>> entries = buildEntries(20);
-        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5, 0);
 
         Value result = ssTable.get(7, dataFile, ssTable.loadIndex(indexFile));
 
@@ -279,7 +279,7 @@ public class SSTableTest {
 
     @Test
     void scanOnEmptyTableReturnsAbsentWithZeroReads() throws IOException {
-        ssTable.write(new ArrayList<>(), dataFile, indexFile, bloomFilterFile, 5);
+        ssTable.write(new ArrayList<>(), dataFile, indexFile, bloomFilterFile, 5, 0);
         List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
 
         SSTable.ScanResult<Value> result = ssTable.scan(0, dataFile, loaded);
@@ -293,7 +293,7 @@ public class SSTableTest {
     @Test
     void cursorGivesEntriesInSameOrderAsReadAll() throws IOException {
         List<Entry<Integer, Value>> entries = buildEntries(10);
-        ssTable.write(entries,dataFile, indexFile, bloomFilterFile, 4);
+        ssTable.write(entries,dataFile, indexFile, bloomFilterFile, 4, 0);
 
         List<Entry<Integer, Value>> allReadEntries = ssTable.readAll(dataFile);
         try(EntrySource<Integer> cursor = ssTable.openCursor(dataFile)){
@@ -313,7 +313,7 @@ public class SSTableTest {
 
     @Test
     void emptyDataFileCursorReturnNoEntries() throws IOException {
-        ssTable.write(new ArrayList<>(), dataFile, indexFile, bloomFilterFile, 5);
+        ssTable.write(new ArrayList<>(), dataFile, indexFile, bloomFilterFile, 5, 0);
         try(EntrySource<Integer> cursor = ssTable.openCursor(dataFile)){
             assertFalse(cursor.hasNext(), "EntryCursor hasNext() should return false for empty file");
             assertNull(cursor.next(),"EntryCursor next() return null when there is nothing to read");
@@ -323,7 +323,7 @@ public class SSTableTest {
     @Test
     void closeReleasesFileHandleForImmediateReuse() throws IOException {
         List<Entry<Integer, Value>> entries = buildEntries(5);
-        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5, 0);
 
         try (EntrySource<Integer> cursor = ssTable.openCursor(dataFile)) {
             cursor.next();
@@ -338,7 +338,7 @@ public class SSTableTest {
     @Test
     void closingPartiallyDrainedCursorDoesNotThrow() throws IOException {
         List<Entry<Integer, Value>> entries = buildEntries(10);
-        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 4);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 4, 0);
 
         EntrySource<Integer> cursor = ssTable.openCursor(dataFile);
         cursor.next();
@@ -350,7 +350,7 @@ public class SSTableTest {
     @Test
     void independentCursorsOnSameFileDoNotInterfere() throws IOException {
         List<Entry<Integer, Value>> entries = buildEntries(5);
-        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5, 0);
 
         try (EntrySource<Integer> cursorA = ssTable.openCursor(dataFile);
              EntrySource<Integer> cursorB = ssTable.openCursor(dataFile)) {
@@ -377,7 +377,7 @@ public class SSTableTest {
         SSTable<Integer> countingTable = new SSTable<>(countingCodec);
 
         List<Entry<Integer, Value>> entries = buildEntries(50);
-        countingTable.write(entries, dataFile, indexFile, bloomFilterFile, 5);
+        countingTable.write(entries, dataFile, indexFile, bloomFilterFile, 5, 0);
         List<IndexEntry> loaded = countingTable.loadIndex(indexFile);
 
         countingCodec.decodeCallCount = 0; // reset right before the calls actually under test
@@ -412,7 +412,7 @@ public class SSTableTest {
     @Test
     void rangeCursorInsideOneSampleIntervalReturnsExactKeys() throws IOException {
         List<Entry<Integer, Value>> entries = buildEntries(20);
-        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5, 0);
         List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
 
         assertEquals(List.of(7, 8, 9), rangeKeys(dataFile, loaded, 7, 9));
@@ -421,7 +421,7 @@ public class SSTableTest {
     @Test
     void rangeCursorSpanningMultipleSampleIntervalsReturnsExactKeys() throws IOException {
         List<Entry<Integer, Value>> entries = buildEntries(20);
-        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5, 0);
         List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
 
         assertEquals(entries.subList(3, 18).stream().map(Entry::getKey).toList(), rangeKeys(dataFile, loaded, 3, 17));
@@ -430,7 +430,7 @@ public class SSTableTest {
     @Test
     void rangeCursorWithLowBelowFirstKeyStartsFromBeginning() throws IOException {
         List<Entry<Integer, Value>> entries = buildEntries(20);
-        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5, 0);
         List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
 
         assertEquals(List.of(0, 1, 2, 3, 4), rangeKeys(dataFile, loaded, -100, 4));
@@ -439,7 +439,7 @@ public class SSTableTest {
     @Test
     void rangeCursorWithHighAboveLastKeyReadsToEnd() throws IOException {
         List<Entry<Integer, Value>> entries = buildEntries(20);
-        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5, 0);
         List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
 
         assertEquals(List.of(15, 16, 17, 18, 19), rangeKeys(dataFile, loaded, 15, 1000));
@@ -448,7 +448,7 @@ public class SSTableTest {
     @Test
     void rangeCursorWithLowAboveEveryKeyReturnsEmptyWithoutThrowing() throws IOException {
         List<Entry<Integer, Value>> entries = buildEntries(10);
-        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5, 0);
         List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
 
         assertEquals(List.of(), rangeKeys(dataFile, loaded, 100, 200));
@@ -457,7 +457,7 @@ public class SSTableTest {
     @Test
     void rangeCursorWithLowGreaterThanHighReturnsEmpty() throws IOException {
         List<Entry<Integer, Value>> entries = buildEntries(20);
-        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5, 0);
         List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
 
         assertEquals(List.of(), rangeKeys(dataFile, loaded, 15, 5));
@@ -466,7 +466,7 @@ public class SSTableTest {
     @Test
     void rangeCursorOnExactBoundaryKeysIncludesBothEndsInclusive() throws IOException {
         List<Entry<Integer, Value>> entries = buildEntries(20);
-        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5);
+        ssTable.write(entries, dataFile, indexFile, bloomFilterFile, 5, 0);
         List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
 
         assertEquals(List.of(5, 6, 7, 8, 9, 10), rangeKeys(dataFile, loaded, 5, 10));
@@ -474,7 +474,7 @@ public class SSTableTest {
 
     @Test
     void rangeCursorOnEmptyTableReturnsEmptyWithoutThrowing() throws IOException {
-        ssTable.write(new ArrayList<>(), dataFile, indexFile, bloomFilterFile, 5);
+        ssTable.write(new ArrayList<>(), dataFile, indexFile, bloomFilterFile, 5, 0);
         List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
 
         assertEquals(List.of(), rangeKeys(dataFile, loaded, 0, 100));

@@ -37,7 +37,7 @@ public class StreamingMergeStrategy<K extends Comparable<K>> implements MergeStr
         }
 
         try (EntrySource<K> source = new MergeCursor<>(sources)) {
-            return List.of(table.write(source, dataFile, indexFile, bloomFilterFile, sampleEvery, approxEntries));
+            return List.of(table.write(source, dataFile, indexFile, bloomFilterFile, sampleEvery, approxEntries,0));
         }
     }
 }

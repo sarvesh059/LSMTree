@@ -58,8 +58,7 @@ public class LeveledMergeStrategy<K extends Comparable<K>> implements MergeStrat
         }
 
         try (EntrySource<K> source = new MergeCursor<>(sources)) {
-            Segment<K> segment = table.write(source, dataFile, indexFile, bloomFilterFile, sampleEvery, approxEntries);
-            segment.setLevel(level+1);
+            Segment<K> segment = table.write(source, dataFile, indexFile, bloomFilterFile, sampleEvery, approxEntries, level+1);
             segment.setMinKey(minKey);
             segment.setMaxKey(maxKey);
             return List.of(segment);

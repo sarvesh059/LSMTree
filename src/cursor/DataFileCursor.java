@@ -20,6 +20,7 @@ public class DataFileCursor<K> implements EntrySource<K> {
         this.input = new RandomAccessFile(dataFile, "r");
         this.keyCodec = keyCodec;
         this.entryCount = input.readInt();
+        input.readInt(); // level, not needed by this cursor
         this.maxEventId = input.readLong();
     }
 

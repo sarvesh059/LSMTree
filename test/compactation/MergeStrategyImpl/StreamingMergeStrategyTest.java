@@ -26,12 +26,12 @@ public class StreamingMergeStrategyTest {
         var dataGood = dir.resolve("good.data").toFile();
         var idxGood = dir.resolve("good.idx").toFile();
         var bloomGood = dir.resolve("good.filter").toFile();
-        Segment<Integer> goodSegment = table.write(List.of(new Entry<Integer,Value>(1, Value.of(new byte[]{1})), new Entry<Integer,Value>(2, Value.of(new byte[]{2}))), dataGood, idxGood, bloomGood, 5);
+        Segment<Integer> goodSegment = table.write(List.of(new Entry<Integer,Value>(1, Value.of(new byte[]{1})), new Entry<Integer,Value>(2, Value.of(new byte[]{2}))), dataGood, idxGood, bloomGood, 5, 0);
 
         var dataBad = dir.resolve("bad.data").toFile();
         var idxBad = dir.resolve("bad.idx").toFile();
         var bloomBad = dir.resolve("bad.filter").toFile();
-        Segment<Integer> badSegment = table.write(List.of(new Entry<Integer,Value>(10, Value.of(new byte[]{10})), new Entry<Integer,Value>(11, Value.of(new byte[]{11}))), dataBad, idxBad, bloomBad, 5);
+        Segment<Integer> badSegment = table.write(List.of(new Entry<Integer,Value>(10, Value.of(new byte[]{10})), new Entry<Integer,Value>(11, Value.of(new byte[]{11}))), dataBad, idxBad, bloomBad, 5, 0);
         try (RandomAccessFile raf = new RandomAccessFile(dataBad, "rw")) {
             raf.setLength(raf.length() - 3);
         }

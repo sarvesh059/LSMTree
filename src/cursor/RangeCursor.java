@@ -22,6 +22,7 @@ public class RangeCursor<K extends Comparable<K>> implements EntrySource<K>{
         this.high = high;
         this.input = new RandomAccessFile(dataFile, "r");
         this.totalEntries = this.input.readInt();
+        this.input.readInt(); // level, not needed by this cursor
         this.maxEventId = this.input.readLong();
         this.keyCodec = keyCodec;
     }

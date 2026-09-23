@@ -6,9 +6,7 @@ import WAL.WAL;
 import bloomFilter.BloomFilter;
 import compactation.CompactionStrategy;
 import compactation.MergeStrategy;
-import core.Segment;
-import core.SegmentFiles;
-import core.Value;
+import core.*;
 import core.key.KeyCodec;
 import cursor.EntrySource;
 import cursor.MergeCursor;
@@ -22,10 +20,7 @@ import java.io.RandomAccessFile;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -78,6 +73,14 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         if (memTable.getSizeInBytes() == 0) return;
 
         List<Entry<K, Value>> memTableEntries = memTable.entries();
+        K minKey = memTableEntries.stream()
+                .min(Comparator.comparing(Entry::getKey))
+                .orElseThrow()
+                .getKey();
+        K maxKey = memTableEntries.stream()
+                .max(Comparator.comparing(Entry::getKey))
+                .orElseThrow()
+                .getKey();
         String dataFileId = UUID.randomUUID().toString();
         String dataFileName = DATA_FILE_PREFIX + dataFileId;
         String indexFileName = INDEX_FILE_PREFIX + dataFileId;
@@ -87,7 +90,9 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         File indexFile = this.dataDir.resolve(indexFileName).toFile();
         File bloomFilterFile = this.dataDir.resolve(bloomFilterFileName).toFile();
 
-        Segment<K> segment = this.ssTable.write(memTableEntries, dataFile, indexFile, bloomFilterFile, this.indexSampleRate);
+        Segment<K> segment = this.ssTable.write(memTableEntries, dataFile, indexFile, bloomFilterFile, this.indexSampleRate, 0);
+        segment.setMinKey(this.codec.encodeKey(minKey));
+        segment.setMaxKey(this.codec.encodeKey(maxKey));
 
         synchronized (this.manifestLock){
             Manifest.append(dataFileName, manifestFile());
@@ -166,9 +171,15 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
             File indexFile = this.dataDir.resolve(indexFileName).toFile();
             File bloomFilterFile = this.dataDir.resolve(bloomFilterFileName).toFile();
             if (dataFile.exists() && indexFile.exists() && bloomFilterFile.exists()) {
-                try(RandomAccessFile dataFileReader = new RandomAccessFile(dataFile, "r");
-                    RandomAccessFile bloomFilterFileReader = new RandomAccessFile(bloomFilterFile, "r")){
-                    Segment<K> segment = new Segment<>(dataFile, this.ssTable.loadIndex(indexFile), BloomFilter.readFrom(bloomFilterFileReader), dataFileReader.readInt(), dataFileReader.readLong());
+                try(RandomAccessFile bloomFilterFileReader = new RandomAccessFile(bloomFilterFile, "r")){
+                    List<IndexEntry> index = this.ssTable.loadIndex(indexFile);
+                    byte[] minKey = this.ssTable.minKey(dataFile, index);
+                    byte[] maxKey = this.ssTable.maxKey(dataFile,index);
+                    DataFileMetaData dataFileMetaData = this.ssTable.getMetaData(dataFile);
+                    Segment<K> segment = new Segment<>(dataFile, index, BloomFilter.readFrom(bloomFilterFileReader), dataFileMetaData.entryCount(), dataFileMetaData.maxEventId());
+                    segment.setMinKey(minKey);
+                    segment.setMaxKey(maxKey);
+                    segment.setLevel(dataFileMetaData.level());
                     maxEventId = Math.max(maxEventId, segment.getMaxEventId());
                     segments.add(segment);
                 }

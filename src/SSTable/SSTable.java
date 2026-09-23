@@ -2,6 +2,7 @@ package SSTable;
 
 import RBT.Entry;
 import bloomFilter.BloomFilter;
+import core.DataFileMetaData;
 import core.IndexEntry;
 import core.Segment;
 import core.Value;
@@ -22,11 +23,11 @@ public class SSTable<K extends Comparable<K>> {
         this.keyCodec = keyCodec;
     }
 
-    public Segment<K> write(List<Entry<K, Value>> entries, File dataFile, File indexFile, File bloomFilterFile, int sampleEvery) throws IOException {
+    public Segment<K> write(List<Entry<K, Value>> entries, File dataFile, File indexFile, File bloomFilterFile, int sampleEvery, int level) throws IOException {
         Iterator<Entry<K, Value>> it = entries.iterator();
         EntrySource<K> source = memTableCursor(entries);
 
-        return write(source, dataFile, indexFile, bloomFilterFile, sampleEvery, entries.size());
+        return write(source, dataFile, indexFile, bloomFilterFile, sampleEvery, entries.size(), level);
     }
 
     public EntrySource<K> memTableCursor(List<Entry<K,Value>> entries){
@@ -49,7 +50,7 @@ public class SSTable<K extends Comparable<K>> {
         };
     }
 
-    public Segment<K> write(EntrySource<K> entries, File dataFile, File indexFile, File bloomFilterFile, int sampleEvery, int approxEntries) throws IOException {
+    public Segment<K> write(EntrySource<K> entries, File dataFile, File indexFile, File bloomFilterFile, int sampleEvery, int approxEntries, int level) throws IOException {
         List<IndexEntry> indexEntries = new ArrayList<>();
         BloomFilter bloomFilter = new BloomFilter(approxEntries, 0.02);
         int newEntriesAdded = 0;
@@ -57,8 +58,7 @@ public class SSTable<K extends Comparable<K>> {
         try (RandomAccessFile dataFileWriter = new RandomAccessFile(dataFile, "rw");
              RandomAccessFile indexFileWriter = new RandomAccessFile(indexFile, "rw");
              RandomAccessFile bloomFilterWriter = new RandomAccessFile(bloomFilterFile, "rw")) {
-            dataFileWriter.writeInt(0);
-            dataFileWriter.writeLong(maxEventId);
+            updateDataFileMetaData(0, level,maxEventId,dataFileWriter);
             indexFileWriter.writeInt(0);
 
             while (entries.hasNext()) {
@@ -76,11 +76,9 @@ public class SSTable<K extends Comparable<K>> {
                 newEntriesAdded++;
             }
 
-            dataFileWriter.seek(0);
+            updateDataFileMetaData(newEntriesAdded,level,maxEventId, dataFileWriter);
             indexFileWriter.seek(0);
             bloomFilterWriter.seek(0);
-            dataFileWriter.writeInt(newEntriesAdded);
-            dataFileWriter.writeLong(maxEventId);
             indexFileWriter.writeInt(indexEntries.size());
             bloomFilter.writeTo(bloomFilterWriter);
 
@@ -91,9 +89,17 @@ public class SSTable<K extends Comparable<K>> {
         return new Segment<>(dataFile, indexEntries, bloomFilter, newEntriesAdded, maxEventId);
     }
 
+    private void updateDataFileMetaData(int entryCount, int level, long maxEventId, RandomAccessFile dataFileWriter) throws IOException{
+        dataFileWriter.seek(0);
+        dataFileWriter.writeInt(entryCount);
+        dataFileWriter.writeInt(level);
+        dataFileWriter.writeLong(maxEventId);
+    }
+
     public List<Entry<K, Value>> readAll(File file) throws IOException {
         try (RandomAccessFile input = new RandomAccessFile(file, "r")) {
             int entryCount = input.readInt();
+            int level = input.readInt();
             long maxEventId = input.readLong();
             List<Entry<K, Value>> entries = new ArrayList<>();
             for (int i = 0; i < entryCount; i++) {
@@ -174,6 +180,7 @@ public class SSTable<K extends Comparable<K>> {
         try (RandomAccessFile readStream = new RandomAccessFile(dataFile, "r")) {
             if(floorIndexEntry == null){
                 int totalEntries = readStream.readInt();
+                int level = readStream.readInt();
                 long maxEventId = readStream.readLong();
                 previousOffset = readStream.getFilePointer();
             }
@@ -198,6 +205,36 @@ public class SSTable<K extends Comparable<K>> {
         RangeCursor<K> cursor = new RangeCursor<>(low, high, dataFile, this.keyCodec);
         cursor.seek(noKeyReachesLow ? dataFile.length() : previousOffset);
         return cursor;
+    }
+
+    public byte[] minKey(File datafile, List<IndexEntry> loadedIndex){
+        return loadedIndex.getFirst().getEncodedKey();
+    }
+
+    public byte[] maxKey(File dataFile, List<IndexEntry> loadedIndex) throws IOException{
+        IndexEntry lastIndexEntry = loadedIndex.getLast();
+        try (RandomAccessFile readStream = new RandomAccessFile(dataFile, "r")){
+            readStream.seek(lastIndexEntry.getOffset());
+            byte[] lastKey = null;
+            Value value;
+            while (true) {
+                try {
+                    lastKey = this.keyCodec.readRawEncoded(readStream);
+                    value = Value.readFrom(readStream);
+                } catch (EOFException e) {
+                    return lastKey;
+                }
+            }
+        }
+    }
+
+    public DataFileMetaData getMetaData(File dataFile) throws IOException{
+        try(RandomAccessFile dataFileReader = new RandomAccessFile(dataFile, "rw")){
+            int entryCount = dataFileReader.readInt();
+            int level = dataFileReader.readInt();
+            long maxEventid = dataFileReader.readLong();
+            return new DataFileMetaData(entryCount, level, maxEventid);
+        }
     }
 
     record ScanResult<V>(V value, int entriesRead) {

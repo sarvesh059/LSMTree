@@ -144,29 +144,55 @@ exist to have something to measure, and should reflect the final, concurrent-saf
       ("pick any"); this is bonus scope, not required. Deliberately deferred until after T7.6 —
       building it first would mean designing its range-overlap-aware trigger/select logic under
       single-threaded assumptions, then needing to revisit it for concurrency safety once T7.6
-      lands. Scope committed (full N-level, real read-path payoff, not a toy):
-      - `Segment<K>` gains `level` (int) and `minKey`/`maxKey` fields, persisted in the segment's
-        own header (same principle as `maxEventId` — not duplicated into the manifest). Store
-        `minKey`/`maxKey` as encoded `byte[]`, ready for `compareEncoded` without re-encoding.
-      - `MergeStrategy.merge()`'s return type widens to `List<Segment<K>>` — existing strategies
-        (`FullLoadMergeStrategy`) return a singleton list.
-      - `LeveledMergeStrategy`: reuses the existing heap-merge cursor machinery, partitions output
-        across multiple files once a target-size-per-level is hit, tags each with its new `level`
-        and `minKey`/`maxKey`.
-      - `LeveledCompactionStrategy`: L0 triggers on segment **count** (segments can overlap —
-        RocksDB default 4); L1+ triggers on total **bytes** in the level, exponentially growing
-        per level (`Li target ≈ L1_target × 10^(i-1)`, RocksDB's level-multiplier convention).
-        Selection: L0 compaction grabs all L0 segments plus every L1 segment overlapping any of
-        them; Li→Li+1 (i≥1) picks **one** segment from Li via a per-level "compact pointer" that
-        rotates through the keyspace each time (so cold key ranges aren't starved), then merges in
-        every Li+1 segment whose range overlaps it. Compact pointer is in-memory only, resets on
-        restart — an accepted, named gap for now, same status as no-physical-deletion-yet.
-      - `flush()` tags newly-written segments `level=0`.
-      - **`get()`/`scan()` become level-aware** — this is the part that makes the whole thing real
-        rather than theoretical: without it, leveled compaction pays its write-amp cost with no
-        read-amp payoff to show for it, which would be strictly worse than what's already built.
-        L0 stays a bloom-filter-gated linear scan, newest-to-oldest, same as today (L0 segments
-        can overlap, so more than one may match). L1+ jumps straight to the *one* segment whose
+      lands. Scope committed (full N-level, real read-path payoff, not a toy). Progress so far:
+      - [x] `Segment<K>` gains `level` (int) and `minKey`/`maxKey` (`byte[]`, encoded — ready for
+        `compareEncoded` without re-encoding) fields. **Not persisted to the segment header** —
+        deliberately reconsidered and reversed from the original plan (see below).
+      - [x] `MergeStrategy.merge()`'s return type widened to `List<Segment<K>>`; signature also
+        widened to accept a `Supplier<SegmentFiles>` factory instead of three fixed `File`s, so a
+        strategy can request as many output-file triples as it needs. `LSMTree` owns the factory
+        (naming convention + WIP-manifest-registration unchanged, just made repeatable per call);
+        `sharedCompactionLogic()` loops over N returned segments (rename-from-WIP, manifest-append,
+        add-to-`Version`) instead of assuming exactly one. `FullLoadMergeStrategy`/
+        `StreamingMergeStrategy` adapted (call the factory once, since they only ever produce one
+        segment). Full project compiles and all tests pass as one unit again (179/179).
+      - [x] `LeveledCompactionStrategy`: trigger/select logic built and verified via targeted probes
+        — five real bugs found and fixed along the way (missing cross-level overlap inclusion in
+        both the L0 and L1+ branches, whole-level-instead-of-one-segment selection, L0's phantom
+        byte-size trigger path, an NPE when the next level has no segments yet, a non-monotonic
+        compact-pointer sweep from unsorted segments, and a maxKey range computed from the wrong
+        field — twice, same class of typo in two different places).
+      - [x] `LeveledMergeStrategy`: level tagging (`min(input levels) + 1`) and per-merge
+        `minKey`/`maxKey` computed as the union of input ranges (min of mins, max of maxes) —
+        verified this is always safe-or-exact, never under-estimates, by induction: `flush()`'s
+        base case is exact (tombstones are never elided on a raw flush), and taking the union
+        across repeated merges can only match-or-widen the true range, never narrow past it. One
+        real bug found (comparing the wrong field for the max computation — same class of typo as
+        one of the `LeveledCompactionStrategy` bugs above) and fixed.
+      - [x] `flush()` tags new segments `level=0` and sets exact `minKey`/`maxKey` from
+        `memTableEntries` (exact, not just a safe bound, since nothing is elided on a raw flush).
+      - **Reconsidered: `minKey`/`maxKey` are NOT persisted to the segment header.** The original
+        plan (same principle as `maxEventId`, in the header, read back by `recover()`) would have
+        touched five separate read call sites (`SSTable.readAll`/`rangeCursor`, `DataFileCursor`,
+        `RangeCursor`, `LSMTree.recover()`) — the exact shape of gap that caused 14 failing tests
+        the first time a header field was added. Reconsidered because the values are derivable
+        cheaply enough not to need it: every other place a `Segment` is built already computes
+        `minKey`/`maxKey` once from entries already in hand and just keeps them in memory (same
+        pattern as `loadedIndex`/`bloomFilter` — computed once, cached, never re-read from disk).
+        The only place that needs to *derive* rather than carry forward is `recover()`: `minKey`
+        is free (first entry, right after the header); `maxKey` is a bounded scan from the sparse
+        index's last sample to EOF (at most `sampleEvery` entries), not a full scan — unlike
+        `entryCount`/`maxEventId`, which genuinely can't be bounded this way (entries are sorted by
+        key, not write order, so finding the max event id without persisting it means scanning
+        every entry). Still open: wiring this derivation into `recover()`.
+      - [ ] Still open: `LeveledMergeStrategy` doesn't yet partition its output into multiple
+        bounded-size segments — it writes exactly one segment per merge (the file-factory plumbing
+        above is the prerequisite for this and is now in place; the partitioning loop itself, and
+        the target-file-size parameter it needs, aren't built yet).
+      - [ ] Still open: **`get()`/`scan()` becoming level-aware** — the part that makes the whole
+        thing real rather than theoretical: without it, leveled compaction pays its write-amp cost
+        with no read-amp payoff to show for it. L0 stays a bloom-filter-gated linear scan,
+        newest-to-oldest, same as today. L1+ should jump straight to the *one* segment whose
         `minKey`/`maxKey` range covers the target key, instead of scanning the level.
 
 **Deepening T7.6 toward production grade** (not new features — the same concurrency/async-compaction
