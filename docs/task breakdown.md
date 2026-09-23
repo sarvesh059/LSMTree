@@ -162,7 +162,9 @@ ground T7.6 already covers, taken further than its written AC required):
       `Segment`s — a reader pins whatever reference it grabbed; a file only gets deleted once
       nothing live still references it (the same mechanism as LevelDB/RocksDB's `Version`). The
       most invasive of this group — touches `get()`/`scan()`'s hot path directly with pin/unpin
-      discipline, not just the compaction subsystem.
+      discipline, not just the compaction subsystem. Scope together with the "MVCC: sequence-
+      ceiling filtering + compaction awareness of live snapshots" item below — this is the
+      deletion path that item's live-snapshot tracking would actually be protecting against.
 - [ ] **Write backpressure / stall when compaction falls behind.** Nothing currently slows writes
       down if compaction can't keep up with the write rate — segments just accumulate and read
       amplification degrades without bound. Real systems deliberately stall/throttle writes when
@@ -205,16 +207,38 @@ existing AC; found by asking what consistency guarantees this tree actually offe
       mutated in place can't cheaply hand out "the tree as of sequence N" the way path-copying can)
       for less allocation churn and a simpler concurrency story — a genuine, real production
       trade-off between the two designs, not just "which is faster."
-- [ ] **MVCC snapshot isolation for `scan()`.** Confirmed real via a concrete concurrent probe,
-      not hypothetical: `scan()` currently reads `segments` and `memTable` as two *separately*
-      captured views, not one atomic snapshot. A key can fall into the gap between an in-flight
-      `flush()`'s segment-swap and its memTable-clear and vanish from that one scan entirely, even
-      though it existed continuously from the writer's perspective — a genuine lost read, not a
-      crash or corrupted value. Fix: capture one sequence-number ceiling (`eventCounter`'s current
-      value) at the start of a scan, filter every source (memTable + every segment) to
-      `id <= ceiling`. Needs compaction to track the oldest sequence number any open snapshot
-      still needs and never discard a version newer than that, even when a newer version of the
-      same key already exists elsewhere.
+- [x] **Consistent point-in-time reads for `scan()` (atomic `Version` bundling).** Confirmed real
+      via a concrete concurrent probe, not hypothetical: `scan()` used to read `segments` and
+      `memTable` as two *separately* captured views, not one atomic snapshot. A key could fall into
+      the gap between an in-flight `flush()`'s segment-swap and its memTable-clear and vanish from
+      that one scan entirely, even though it existed continuously from the writer's perspective.
+      Traced through why a sequence-number ceiling alone (the original plan) would NOT have fixed
+      this: `flush()` writes `segments` then `memTable` in that order, and `scan()` read them in
+      the *same* order — meaning it could straddle the boundary and see the old segments list *and*
+      the new, already-cleared memTable, the worst combination, regardless of any id filter applied
+      afterward. A ceiling filters *which writes count*, not *which torn combination of fields you
+      happened to read* — a self-consistent filter over a torn read is still torn. Fixed the same
+      way LevelDB/RocksDB do for this exact reason: `memTable` + `segments` bundled into one
+      `Version` record, published via a single `AtomicReference<Version<K>>`, swapped atomically as
+      one unit on every `flush()`/`compact()`. `get()`/`scan()`/`put()` all capture one `Version`
+      once per call. Two real bugs found and fixed while landing this, both with permanent
+      regression coverage: (1) a first attempt kept `segments` as an `AtomicReference` *inside*
+      `Version`, reusing the same mutable cell across transitions instead of a fresh one — proven
+      via a reflection-based probe showing an already-captured `Version`'s segment count changing
+      after a later, unrelated `flush()`; (2) `recover()` replayed the WAL into one `MemTable`
+      object but published a *different*, still-empty one — proven via a close-without-flush /
+      reopen probe showing complete silent data loss on recovery. Permanent test:
+      `LSMTreeConcurrencyTest.scanNeverLosesAKeyToAConcurrentFlush`.
+- [ ] **MVCC: sequence-ceiling filtering + compaction awareness of live snapshots.** Deliberately
+      split from the item above after tracing through what each mechanism actually buys: this half
+      (filter every source to `id <= ceiling`, compaction tracks the oldest sequence any open
+      snapshot still needs before discarding a superseded version) only has something to protect
+      once something can actually discard data out from under an old, already-open snapshot. Today
+      nothing does — there's no physical segment-file deletion yet, so an old snapshot's captured
+      segments/files just sit there untouched regardless. Building this now would compile, pass
+      tests, and provably do nothing. Scope it together with physical segment-file deletion +
+      refcounting below — in LevelDB/RocksDB these aren't separable mechanisms; `Version`
+      refcounting is simultaneously the read-consistency story and the deletion-safety story.
 - [ ] **Group commit (batched WAL writes).** Every `put()` currently pays for its own WAL append
       + `fsync` under the single global writer lock. RocksDB's `WriteThread` pattern: one thread
       becomes a leader, batches up whatever other writers are waiting, and does one combined WAL
