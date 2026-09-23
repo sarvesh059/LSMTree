@@ -4,6 +4,7 @@ import RBT.Entry;
 import SSTable.SSTable;
 import compactation.MergeStrategy;
 import core.Segment;
+import core.SegmentFiles;
 import core.Value;
 import core.key.KeyCodec;
 
@@ -11,6 +12,7 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Supplier;
 
 public class FullLoadMergeStrategy<K extends Comparable<K>> implements MergeStrategy<K> {
     private final KeyCodec<K> codec;
@@ -20,10 +22,14 @@ public class FullLoadMergeStrategy<K extends Comparable<K>> implements MergeStra
     }
 
     @Override
-    public List<Segment<K>> merge(List<Segment<K>> segments, File dataFile, File indexFile, File bloomFilterFile, int sampleEvery) throws IOException {
+    public List<Segment<K>> merge(List<Segment<K>> segments, Supplier<SegmentFiles> segmentFilesSupplier, int sampleEvery) throws IOException {
         List<List<Entry<K, Value>>> entriesList = new ArrayList<>();
 
         SSTable<K> table = new SSTable<>(this.codec);
+        SegmentFiles segmentFiles = segmentFilesSupplier.get();
+        File dataFile = segmentFiles.dataFile();
+        File indexFile = segmentFiles.indexFile();
+        File bloomFilterFile = segmentFiles.bloomFilterFile();
 
         for(Segment<K> segment: segments){
             List<Entry<K, Value>> entries = table.readAll(segment.getDataFile());

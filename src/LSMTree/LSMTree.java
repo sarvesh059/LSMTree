@@ -7,6 +7,7 @@ import bloomFilter.BloomFilter;
 import compactation.CompactionStrategy;
 import compactation.MergeStrategy;
 import core.Segment;
+import core.SegmentFiles;
 import core.Value;
 import core.key.KeyCodec;
 import cursor.EntrySource;
@@ -28,6 +29,7 @@ import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 
 public class LSMTree<K extends Comparable<K>> implements Closeable {
@@ -209,37 +211,58 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
 
     void sharedCompactionLogic(List<Segment<K>> selectedSegments) throws IOException {
         File manifestFile = manifestFile();
-        String uuid = UUID.randomUUID().toString();
-        String wipDatafileName = WIP_FILE_PREFIX + DATA_FILE_PREFIX + uuid;
-        String dataFileName = DATA_FILE_PREFIX + uuid;
-        String indexFileName = INDEX_FILE_PREFIX + uuid;
-        String bloomFilterFileName = BLOOM_FILTER_FILE_PREFIX+uuid;
+        Supplier<SegmentFiles> fileFactory = () -> {
+            String uuid = UUID.randomUUID().toString();
+            String wipDataFileName = WIP_FILE_PREFIX + DATA_FILE_PREFIX + uuid;
+            String indexFileName = INDEX_FILE_PREFIX + uuid;
+            String bloomFilterFileName = BLOOM_FILTER_FILE_PREFIX + uuid;
 
-        synchronized (this.manifestLock) {
-            Manifest.append(wipDatafileName, manifestFile);
+            synchronized (this.manifestLock) {
+                try {
+                    Manifest.append(wipDataFileName, manifestFile);
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+
+            return new SegmentFiles(
+                    this.dataDir.resolve(wipDataFileName).toFile(),
+                    this.dataDir.resolve(indexFileName).toFile(),
+                    this.dataDir.resolve(bloomFilterFileName).toFile()
+            );
+        };
+
+        List<Segment<K>> wipSegments = this.mergeStrategy.merge(selectedSegments, fileFactory, this.indexSampleRate);
+        List<Segment<K>> newSegments = new ArrayList<>();
+        List<String> newDataFileNames = new ArrayList<>();
+        for (Segment<K> wipSegment : wipSegments) {
+            String wipDataFileName = wipSegment.getDataFile().getName();
+            String dataFileName = wipDataFileName.substring(WIP_FILE_PREFIX.length());
+            File dataFile = this.dataDir.resolve(dataFileName).toFile();
+
+            Files.move(wipSegment.getDataFile().toPath(), dataFile.toPath(), StandardCopyOption.ATOMIC_MOVE);
+
+            Segment<K> finalSegment = new Segment<>(dataFile, wipSegment.getLoadedIndex(),
+                    wipSegment.getBloomFilter(), wipSegment.getEntryCount(), wipSegment.getMaxEventId());
+            finalSegment.setLevel(wipSegment.getLevel());
+            finalSegment.setMinKey(wipSegment.getMinKey());
+            finalSegment.setMaxKey(wipSegment.getMaxKey());
+
+            newSegments.add(finalSegment);
+            newDataFileNames.add(dataFileName);
         }
 
-        File wipDataFile = this.dataDir.resolve(wipDatafileName).toFile();
-        File dataFile = this.dataDir.resolve(dataFileName).toFile();
-        File indexFile = this.dataDir.resolve(indexFileName).toFile();
-        File bloomFilterFile = this.dataDir.resolve(bloomFilterFileName).toFile();
-
-        Segment<K> wipSegment = this.mergeStrategy.merge(selectedSegments, wipDataFile, indexFile, bloomFilterFile, this.indexSampleRate);
-        Files.move(wipDataFile.toPath(), dataFile.toPath(), StandardCopyOption.ATOMIC_MOVE);
-
-        Segment<K> newSegment = new Segment<>(dataFile, wipSegment.getLoadedIndex(), wipSegment.getBloomFilter(), wipSegment.getEntryCount(), wipSegment.getMaxEventId());
-
         this.version.updateAndGet((currentVersion) -> {
-
             List<Segment<K>> newSegmentList = new ArrayList<>(currentVersion.segments());
             newSegmentList.removeAll(selectedSegments);
-            newSegmentList.add(newSegment);
-
+            newSegmentList.addAll(newSegments);
             return new Version<>(currentVersion.memTable(), newSegmentList);
         });
 
         synchronized (this.manifestLock) {
-            Manifest.append(dataFileName, manifestFile);
+            for (String dataFileName : newDataFileNames) {
+                Manifest.append(dataFileName, manifestFile);
+            }
             for (Segment<K> segment : selectedSegments) {
                 Manifest.append(DELETED_FILE_PREFIX + segment.getDataFile().getName(), manifestFile);
             }

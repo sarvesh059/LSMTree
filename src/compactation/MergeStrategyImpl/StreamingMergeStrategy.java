@@ -1,5 +1,6 @@
 package compactation.MergeStrategyImpl;
 
+import core.SegmentFiles;
 import cursor.EntrySource;
 import SSTable.SSTable;
 import compactation.MergeStrategy;
@@ -11,6 +12,7 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Supplier;
 
 public class StreamingMergeStrategy<K extends Comparable<K>> implements MergeStrategy<K> {
     private final KeyCodec<K> codec;
@@ -20,8 +22,13 @@ public class StreamingMergeStrategy<K extends Comparable<K>> implements MergeStr
     }
 
     @Override
-    public List<Segment<K>> merge(List<Segment<K>> segments, File dataFile, File indexFile, File bloomFilterFile, int sampleEvery) throws IOException {
+    public List<Segment<K>> merge(List<Segment<K>> segments, Supplier<SegmentFiles> segmentFilesSupplier, int sampleEvery) throws IOException {
         int approxEntries = segments.stream().mapToInt(Segment::getEntryCount).sum();
+        SegmentFiles segmentFiles = segmentFilesSupplier.get();
+        File dataFile = segmentFiles.dataFile();
+        File indexFile = segmentFiles.indexFile();
+        File bloomFilterFile = segmentFiles.bloomFilterFile();
+
         SSTable<K> table = new SSTable<K>(this.codec);
 
         List<EntrySource<K>> sources = new ArrayList<>();

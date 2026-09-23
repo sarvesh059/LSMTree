@@ -3,6 +3,7 @@ package compactation.MergeStrategyImpl;
 import RBT.Entry;
 import SSTable.SSTable;
 import core.Segment;
+import core.SegmentFiles;
 import core.Value;
 import core.key.KeyCodecImpl.IntegerKeyCodec;
 import org.junit.jupiter.api.Test;
@@ -12,6 +13,7 @@ import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -38,9 +40,10 @@ public class StreamingMergeStrategyTest {
         var outData = dir.resolve("out.data").toFile();
         var outIdx = dir.resolve("out.idx").toFile();
         var outBloom = dir.resolve("out.filter").toFile();
+        Supplier<SegmentFiles> fileFactory = () -> new SegmentFiles(outData, outIdx, outBloom);
 
         assertThrows(IOException.class,
-                () -> merger.merge(List.of(goodSegment, badSegment), outData, outIdx, outBloom, 5),
+                () -> merger.merge(List.of(goodSegment, badSegment), fileFactory, 5),
                 "a truncated entry in one segment should surface as an IOException, not be silently absorbed");
 
         assertTrue(dataGood.delete(), "the good segment's file handle should have been released despite the other segment's failure");
