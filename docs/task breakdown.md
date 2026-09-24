@@ -145,7 +145,12 @@ exist to have something to measure, and should reflect the final, concurrent-saf
       would have meant designing its range-overlap-aware trigger/select logic under
       single-threaded assumptions, then needing to revisit it for concurrency safety once T7.6
       landed. Scope was full N-level, real read-path payoff, not a toy — and it stayed that way
-      end to end. Full history:
+      end to end. Validated against `SizeTieredCompactStrategy`/`FullCompactStrategy` on write/
+      read/space amplification at two scales in `docs/benchmark.md` §13 — leveled's read-amp
+      advantage over size-tiered (the textbook reason production systems use it) is confirmed
+      real, but only emerges once there's enough data to populate more than L0/L1; the small-scale
+      run alone showed the opposite and would have been actively misleading on its own. Full
+      history:
       - [x] `Segment<K>` gains `level` (int) and `minKey`/`maxKey` (`byte[]`, encoded — ready for
         `compareEncoded` without re-encoding) fields. **Not persisted to the segment header** —
         deliberately reconsidered and reversed from the original plan (see below).

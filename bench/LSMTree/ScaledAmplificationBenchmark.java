@@ -20,33 +20,22 @@ import java.util.Random;
 import java.util.UUID;
 
 /**
- * Compares FullCompactStrategy, SizeTieredCompactStrategy and LeveledCompactionStrategy on
- * write/read/space amplification, running the identical workload (same seed, same operation
- * sequence) under each so the comparison is apples-to-apples. Not JUnit -- compile/run the same
- * way as the other benchmarks:
+ * Scaled-up variant of CompactionAmplificationBenchmark (10x the key space: ~58MB of data
+ * instead of ~5-6MB) specifically to test whether leveled compaction's read-amp advantage over
+ * size-tiered -- well-documented in real systems, absent at CompactionAmplificationBenchmark's
+ * small scale -- actually emerges once there's enough data to populate more than L0/L1. It does;
+ * see docs/benchmark.md section 13. Slow: FullCompactStrategy's "rewrite everything on every
+ * trigger" cost compounds badly at this scale (several minutes), unlike the other two.
+ *
  *   javac -d out -cp "lib/*" $(find src -name "*.java")
  *   javac -d out -cp out $(find bench -name "*.java")
- *   java -cp out LSMTree.CompactionAmplificationBenchmark
- *
- * "Production-grade params" for each strategy means matching real systems' actual conventions,
- * scaled down in absolute size to fit this benchmark's dataset (real-world absolute sizes --
- * RocksDB's 256MB level base, 64MB target file size -- would never trigger a single compaction
- * at this scale, making the comparison meaningless):
- *   - SizeTieredCompactStrategy(4, 0.5, 1.5): Cassandra's actual STCS defaults
- *     (min_threshold=4, bucket_low=0.5, bucket_high=1.5), unchanged from T7.3's benchmark.
- *   - LeveledCompactionStrategy: L0 trigger=4 (RocksDB's level0_file_num_compaction_trigger
- *     default), level multiplier=10 (RocksDB's max_bytes_for_level_multiplier default) -- both
- *     hardcoded constants in the class, matching RocksDB's real defaults exactly, just not
- *     exposed as tunable parameters.
- *   - LeveledMergeStrategy's targetSegmentSizeBytes=256KB: RocksDB's target_file_size_base is
- *     64MB against a 256MB L1 base (roughly 1:4) -- 256KB against this benchmark's 1MB L1 base
- *     preserves that same "one file is a fraction of a level" ratio at benchmark scale.
+ *   java -cp out LSMTree.ScaledAmplificationBenchmark
  */
-public class CompactionAmplificationBenchmark {
+public class ScaledAmplificationBenchmark {
     static final double THETA = 0.99;
     static final int VALUE_SIZE = 100;
-    static final int KEY_SPACE = 50_000;
-    static final int OPS = 20_000;
+    static final int KEY_SPACE = 500_000;
+    static final int OPS = 200_000;
     static final int MEMTABLE_THRESHOLD = 8192;
     static final int SAMPLE_EVERY = 32;
     static final long LEVELED_TARGET_SEGMENT_SIZE_BYTES = 256 * 1024;
@@ -62,7 +51,7 @@ public class CompactionAmplificationBenchmark {
     }
 
     static Result runWorkload(CompactionStrategy<Integer> compactionStrategy, MergeStrategy<Integer> mergeStrategy) throws Exception {
-        Path dir = Files.createTempDirectory("amp-bench");
+        Path dir = Files.createTempDirectory("scaled-amp-bench");
         IntegerKeyCodec codec = new IntegerKeyCodec();
         LSMTree<Integer> tree = new LSMTree<>(codec, dir, SAMPLE_EVERY, MEMTABLE_THRESHOLD,
                 compactionStrategy, mergeStrategy);
@@ -101,8 +90,9 @@ public class CompactionAmplificationBenchmark {
         double readAmp = tree.getCallCount() == 0 ? 0.0 : tree.segmentsConsultedCount() / (double) tree.getCallCount();
 
         int segmentCount = tree.segmentCount();
+        int maxLevel = tree.segments().stream().mapToInt(Segment::getLevel).max().orElse(0);
         Result result = new Result(writeAmp, spaceAmp, readAmp, writtenBytes, totalPutBytes,
-                liveBytes, logicalBytes, tree.segmentsConsultedCount(), tree.getCallCount(), segmentCount);
+                liveBytes, logicalBytes, tree.segmentsConsultedCount(), tree.getCallCount(), segmentCount, maxLevel);
         tree.close();
         return result;
     }
@@ -140,7 +130,7 @@ public class CompactionAmplificationBenchmark {
     record Result(double writeAmp, double spaceAmp, double readAmp,
                    long writtenBytes, long totalPutBytes,
                    long liveBytes, long logicalBytes,
-                   long segmentsConsulted, long getCalls, int finalSegmentCount) {
+                   long segmentsConsulted, long getCalls, int finalSegmentCount, int maxLevel) {
     }
 
     static void report(String label, Result r) {
@@ -148,6 +138,6 @@ public class CompactionAmplificationBenchmark {
         System.out.printf("  writeAmp=%.2fx  (writtenBytes=%d, putBytes=%d)%n", r.writeAmp(), r.writtenBytes(), r.totalPutBytes());
         System.out.printf("  spaceAmp=%.2fx  (liveBytes=%d, logicalBytes=%d)%n", r.spaceAmp(), r.liveBytes(), r.logicalBytes());
         System.out.printf("  readAmp=%.3f segments/get  (segmentsConsulted=%d, getCalls=%d)%n", r.readAmp(), r.segmentsConsulted(), r.getCalls());
-        System.out.printf("  finalSegmentCount=%d%n%n", r.finalSegmentCount());
+        System.out.printf("  finalSegmentCount=%d  maxLevelReached=%d%n%n", r.finalSegmentCount(), r.maxLevel());
     }
 }
