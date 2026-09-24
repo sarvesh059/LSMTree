@@ -38,7 +38,12 @@ public class FullLoadMergeStrategy<K extends Comparable<K>> implements MergeStra
 
         List<Entry<K,Value>> updatedEntries = kWayMerge(entriesList);
 
-        return List.of(table.write(updatedEntries, dataFile, indexFile, bloomFilterFile, sampleEvery, 0));
+        Segment<K> segment = table.write(updatedEntries, dataFile, indexFile, bloomFilterFile, sampleEvery, 0);
+        if (!updatedEntries.isEmpty()) {
+            segment.setMinKey(this.codec.encodeKey(updatedEntries.getFirst().getKey()));
+            segment.setMaxKey(this.codec.encodeKey(updatedEntries.getLast().getKey()));
+        }
+        return List.of(segment);
     }
 
     List<Entry<K, Value>> kWayMerge(List<List<Entry<K, Value>>> entriesList){

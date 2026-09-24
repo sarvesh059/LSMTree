@@ -140,11 +140,12 @@ exist to have something to measure, and should reflect the final, concurrent-saf
 
 ## Side Quests (optional, not required by any phase's AC)
 
-- [ ] **In progress — Leveled compaction strategy.** T7.3's AC was satisfied by size-tiered
-      ("pick any"); this is bonus scope, not required. Deliberately deferred until after T7.6 —
-      building it first would mean designing its range-overlap-aware trigger/select logic under
+- [x] **Leveled compaction strategy.** T7.3's AC was satisfied by size-tiered ("pick any"); this
+      was bonus scope, not required. Deliberately deferred until after T7.6 — building it first
+      would have meant designing its range-overlap-aware trigger/select logic under
       single-threaded assumptions, then needing to revisit it for concurrency safety once T7.6
-      lands. Scope committed (full N-level, real read-path payoff, not a toy). Progress so far:
+      landed. Scope was full N-level, real read-path payoff, not a toy — and it stayed that way
+      end to end. Full history:
       - [x] `Segment<K>` gains `level` (int) and `minKey`/`maxKey` (`byte[]`, encoded — ready for
         `compareEncoded` without re-encoding) fields. **Not persisted to the segment header** —
         deliberately reconsidered and reversed from the original plan (see below).
@@ -245,11 +246,81 @@ exist to have something to measure, and should reflect the final, concurrent-saf
         mechanism in its own right. No correctness reason found to change it; the only argument
         for doing so would have been uniformity between the two write paths, which wasn't judged
         worth the added complexity.
-      - [ ] Still open: **`get()`/`scan()` becoming level-aware** — the part that makes the whole
-        thing real rather than theoretical: without it, leveled compaction pays its write-amp cost
-        with no read-amp payoff to show for it. L0 stays a bloom-filter-gated linear scan,
-        newest-to-oldest, same as today. L1+ should jump straight to the *one* segment whose
-        `minKey`/`maxKey` range covers the target key, instead of scanning the level.
+      - [x] **`get()`/`scan()` becoming level-aware** — the part that makes the whole thing real
+        rather than theoretical: without it, leveled compaction pays its write-amp cost with no
+        read-amp payoff to show for it. Scope committed and implemented:
+        - **`get()` short-circuits by ascending level**, not just "checks L1+ faster." Since data
+          only moves downward (L0→L1→L2→..., never back up), a match at a shallower level is
+          always at least as new as the same key at a deeper level — nothing can skip past L0 to
+          land directly at L2. So: check L0 first (bloom-gated scan across all L0 segments,
+          comparing event IDs — exactly today's logic, restricted to `level==0`); return
+          immediately if found. Otherwise L1: at most one segment's range can cover the key (cheap
+          in-memory `minKey`/`maxKey` check, no I/O) — check its bloom filter, read if needed,
+          return immediately if found. Otherwise L2, L3, ... same pattern. This is the same shape
+          RocksDB's actual `get()` path uses (memtable → L0 → L1 → L2 → ...), not novel to this
+          codebase.
+        - **`scan()` is a different kind of change, not really level-specific despite the name.**
+          A range scan needs every segment whose range overlaps `[low, high]`, not just one per
+          level — there's no "stop at first match" for a range. The actual win: filter out
+          segments whose `minKey`/`maxKey` doesn't overlap `[low, high]` at all *before* opening a
+          `rangeCursor()` for them, instead of unconditionally opening one per segment in the
+          `Version` regardless of relevance. Benefits L0 and L1+ equally — it's really "use the
+          range metadata segments now carry," which happens to matter more once L1+ segments are
+          non-overlapping (more of them get skipped outright), but isn't a levels concept per se.
+        - **Segment-by-level grouping is done on-the-fly inside `get()`/`scan()`**, not precomputed
+          on `Version` — considered widening `Version` with a precomputed
+          `Map<Integer, List<Segment<K>>>`, decided against it: simpler to keep `Version`'s shape
+          unchanged, and segment counts are small enough that regrouping per call isn't a real
+          cost.
+        - **Backward-compatible by construction, not by special-casing**: for
+          `FullCompactStrategy`/`SizeTieredCompactStrategy` trees, every segment is always
+          `level==0`, so this design degrades to exactly today's `get()`/`scan()` behavior — the
+          L0 branch *is* the current logic verbatim, and the L1+ branch simply never executes
+          since no L1+ segments exist. Nothing needs to change for non-leveled trees; the new path
+          only activates when leveled compaction is actually in use.
+
+        Seven real bugs found and fixed while landing this — by far the highest bug density of
+        any single piece of this whole side quest, mostly because it's the first place that
+        actually *reads* the `minKey`/`maxKey`/`level` metadata every earlier piece had been
+        writing, so every gap in that writing became live the moment something depended on it:
+        1. A first attempt sorted `currentVersion.segments()` **in place** to group by level —
+           since `Version.segments()` returns the exact list object stored in the (supposedly
+           immutable) `Version` record, this mutated a shared, concurrently-readable list out from
+           under any other thread holding the same `Version` reference, silently undoing the
+           entire point of the `Version` bundling work. Proven with a probe that captured a list
+           reference, called `get()` on a separate thread's tree, and showed the held reference's
+           order had changed. Fixed with a defensive copy before sorting.
+        2. The same rewrite also **returned on the first matching segment** instead of comparing
+           event IDs — safe for L1+ (non-overlap guarantees at most one match), not safe for L0
+           (segments there can and do overlap). Proven with a probe: two L0 segments both holding
+           a value for the same key, sorted by `minKey` rather than recency, returned the
+           *older* one — a genuine stale read. Fixed by keeping the max-event-id comparison for
+           the L0 group specifically while keeping first-match-wins for L1+ groups, and only
+           advancing to the next level when the current one has no match at all.
+        3. `FullLoadMergeStrategy`'s output segment never had `minKey`/`maxKey` set at all (same
+           gap `LeveledMergeStrategy` had before it was fixed, just never noticed since nothing
+           read those fields from a non-leveled tree until now) — every key that existed *only* in
+           a post-compaction merged segment became permanently unreadable, because a `null`
+           `maxKey` makes `Arrays.compareUnsigned` report "any real key is greater than this,"
+           so the "is the key past the segment's end" check fires unconditionally. `StreamingMergeStrategy`
+           had the same class of gap, fixed the same way.
+        4. The first fix for #3 called `.setMinKey(...)` twice instead of `.setMinKey(...)` then
+           `.setMaxKey(...)` — same recurring typo shape as several times earlier in this side
+           quest, caught by re-running the same probe rather than assuming the fix matched intent.
+        5. A compaction whose result drops every entry (all tombstones, nothing older underneath
+           them) crashed with `NoSuchElementException` calling `.getFirst()` on an empty list.
+        6. The first fix for #5 (skip creating a segment entirely when the merge result is empty)
+           broke two existing, deliberately-written tests that expect merge() to always produce
+           exactly one segment, empty or not — a real contract from before this work that a
+           quick fix broke without checking for it first. Corrected to keep creating the segment
+           unconditionally, only skipping the now-provably-unreachable `minKey`/`maxKey` derivation
+           when there's nothing to derive it from (which is itself correct: a `null` range on a
+           genuinely empty segment means "covers nothing," which is exactly right).
+        7. `scan()`'s overlap filter initially called `Arrays.compareUnsigned` directly instead of
+           `this.codec.compareEncoded(...)` — harmless today since both existing codecs implement
+           `compareEncoded` as a direct pass-through, but a latent break for any future codec whose
+           encoded-byte comparison isn't a straight unsigned comparison. Fixed for consistency with
+           every other comparison in the codebase.
 
 **Deepening T7.6 toward production grade** (not new features — the same concurrency/async-compaction
 ground T7.6 already covers, taken further than its written AC required):

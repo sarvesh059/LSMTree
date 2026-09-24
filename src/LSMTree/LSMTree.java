@@ -127,19 +127,32 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         Value value = currentVersion.memTable().get(key);
         if (value != null) return value;
 
-        List<Segment<K>> segmentsSnapshot = currentVersion.segments();
-        int segmentsCount = segmentsSnapshot.size();
+        List<Segment<K>> segmentsSnapshot = new ArrayList<>(currentVersion.segments());
         byte[] encodedKey = this.codec.encodeKey(key);
         long maxEventId = -1L;
         Value resultValue = null;
-        for (int i = segmentsCount - 1; i >= 0; i--) {
-            Segment<K> segment = segmentsSnapshot.get(i);
-            if(!segment.getBloomFilter().mightContain(encodedKey)) continue;;
+        segmentsSnapshot.sort((a, b) -> {
+            if (a.getLevel() == b.getLevel()) {
+                return this.codec.compareEncoded(a.getMinKey(), b.getMinKey());
+            } else {
+                return Integer.compare(a.getLevel(), b.getLevel());
+            }
+        });
+        for (Segment<K> segment : segmentsSnapshot) {
+            if(this.codec.compareEncoded(encodedKey,segment.getMinKey()) < 0 ||
+                    this.codec.compareEncoded(encodedKey, segment.getMaxKey()) > 0 ||
+                    !segment.getBloomFilter().mightContain(encodedKey)) continue;
             this.segmentsConsultedCount++;
             Value segmentValue = this.ssTable.get(key, segment.getDataFile(), segment.getLoadedIndex());
-            if(segmentValue != null && segmentValue.getId() > maxEventId){
-                maxEventId = segmentValue.getId();
-                resultValue = segmentValue;
+            if(segmentValue != null){
+                if(segment.getLevel() == 0){
+                    if(segmentValue.getId() > maxEventId){
+                        maxEventId = segmentValue.getId();
+                        resultValue = segmentValue;
+                    }
+                }else{
+                    return resultValue != null ? resultValue : segmentValue;
+                }
             }
         }
 
@@ -304,6 +317,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         List<EntrySource<K>> cursors = new ArrayList<>();
         Version<K> currentVersion = this.version.get();
         for(Segment<K> segment : currentVersion.segments()){
+            if(this.codec.compareEncoded(this.codec.encodeKey(low),segment.getMaxKey())>0 || this.codec.compareEncoded(this.codec.encodeKey(high),segment.getMinKey())<0) continue;
             cursors.add(this.ssTable.rangeCursor(segment.getDataFile(),segment.getLoadedIndex(), this.codec.encodeKey(low), this.codec.encodeKey(high)));
         }
 

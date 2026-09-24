@@ -11,6 +11,7 @@ import cursor.MergeCursor;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.function.Supplier;
 
@@ -29,15 +30,22 @@ public class StreamingMergeStrategy<K extends Comparable<K>> implements MergeStr
         File indexFile = segmentFiles.indexFile();
         File bloomFilterFile = segmentFiles.bloomFilterFile();
 
-        SSTable<K> table = new SSTable<K>(this.codec);
+        SSTable<K> table = new SSTable<>(this.codec);
 
         List<EntrySource<K>> sources = new ArrayList<>();
+        byte[] minKey = null;
+        byte[] maxKey = null;
         for (Segment<K> segment : segments) {
+            if(minKey == null || Arrays.compareUnsigned(minKey, segment.getMinKey()) > 0) minKey=segment.getMinKey();
+            if(maxKey == null || Arrays.compareUnsigned(maxKey, segment.getMaxKey()) < 0) maxKey=segment.getMaxKey();
             sources.add(table.openCursor(segment.getDataFile()));
         }
 
         try (EntrySource<K> source = new MergeCursor<>(sources)) {
-            return List.of(table.write(source, dataFile, indexFile, bloomFilterFile, sampleEvery, approxEntries,0));
+            Segment<K> segment = table.write(source, dataFile, indexFile, bloomFilterFile, sampleEvery, approxEntries,0);
+            segment.setMinKey(minKey);
+            segment.setMaxKey(maxKey);
+            return List.of(segment);
         }
     }
 }
