@@ -29,3 +29,6 @@ bin/
 
 ### Mac OS ###
 .DS_Store
+
+### Task tracking (personal, not for public repo) ###
+docs/task breakdown.md
