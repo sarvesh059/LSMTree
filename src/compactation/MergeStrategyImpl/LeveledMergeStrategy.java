@@ -1,9 +1,11 @@
 package compactation.MergeStrategyImpl;
 
+import RBT.Entry;
 import SSTable.SSTable;
 import compactation.MergeStrategy;
 import core.Segment;
 import core.SegmentFiles;
+import core.Value;
 import core.key.KeyCodec;
 import cursor.EntrySource;
 import cursor.MergeCursor;
@@ -17,51 +19,65 @@ import java.util.function.Supplier;
 
 public class LeveledMergeStrategy<K extends Comparable<K>> implements MergeStrategy<K> {
     private final KeyCodec<K> codec;
+    private final long targetSegmentSizeBytes;
 
-    public LeveledMergeStrategy(KeyCodec<K> codec) {
+    public LeveledMergeStrategy(KeyCodec<K> codec, long targetSegmentSizeBytes) {
         this.codec = codec;
+        this.targetSegmentSizeBytes = targetSegmentSizeBytes;
     }
 
 
     @Override
     public List<Segment<K>> merge(List<Segment<K>> segments, Supplier<SegmentFiles> segmentFilesSupplier, int sampleEvery) throws IOException {
-        int approxEntries = 0;
         int level = Integer.MAX_VALUE;
-        byte[] minKey = null;
-        byte[] maxKey = null;
 
         for (Segment<K> segment : segments) {
-            approxEntries += segment.getEntryCount();
-
             level = Math.min(level, segment.getLevel());
-
-            if (minKey == null ||
-                    Arrays.compareUnsigned(segment.getMinKey(), minKey) < 0) {
-                minKey = segment.getMinKey();
-            }
-
-            if (maxKey == null ||
-                    Arrays.compareUnsigned(segment.getMinKey(), maxKey) > 0) {
-                maxKey = segment.getMaxKey();
-            }
         }
         SSTable<K> table = new SSTable<>(this.codec);
-
-        SegmentFiles segmentFiles = segmentFilesSupplier.get();
-        File dataFile = segmentFiles.dataFile();
-        File indexFile = segmentFiles.indexFile();
-        File bloomFilterFile = segmentFiles.bloomFilterFile();
 
         List<EntrySource<K>> sources = new ArrayList<>();
         for (Segment<K> segment : segments) {
             sources.add(table.openCursor(segment.getDataFile()));
         }
 
+        List<Segment<K>> newSegments = new ArrayList<>();
         try (EntrySource<K> source = new MergeCursor<>(sources)) {
-            Segment<K> segment = table.write(source, dataFile, indexFile, bloomFilterFile, sampleEvery, approxEntries, level+1);
-            segment.setMinKey(minKey);
-            segment.setMaxKey(maxKey);
-            return List.of(segment);
+            long currentListSize = 0;
+            List<Entry<K, Value>> entries = new ArrayList<>();
+            while(source.hasNext()){
+                Entry<K, Value> entry = source.next();
+                entries.add(entry);
+                byte[] encodedKey = this.codec.encodeKey(entry.getKey());
+                currentListSize += encodedKey.length + entry.getValue().getSizeInBytes();
+                if(currentListSize >= this.targetSegmentSizeBytes){
+                    Segment<K> segment = createSegment(segmentFilesSupplier, entries, table, sampleEvery, level);
+                    segment.setMinKey(this.codec.encodeKey(entries.getFirst().getKey()));
+                    segment.setMaxKey(this.codec.encodeKey(entries.getLast().getKey()));
+                    newSegments.add(segment);
+                    entries = new ArrayList<>();
+                    currentListSize = 0;
+                }
+            }
+
+            if(currentListSize != 0){
+                Segment<K> segment = createSegment(segmentFilesSupplier, entries, table, sampleEvery, level);
+                segment.setMinKey(this.codec.encodeKey(entries.getFirst().getKey()));
+                segment.setMaxKey(this.codec.encodeKey(entries.getLast().getKey()));
+                newSegments.add(segment);
+            }
         }
+
+        return newSegments;
+    }
+
+    private Segment<K> createSegment(Supplier<SegmentFiles> segmentFilesSupplier, List<Entry<K, Value>> entries, SSTable<K> table, int sampleEvery, int level) throws IOException{
+        SegmentFiles segmentFiles = segmentFilesSupplier.get();
+        File dataFile = segmentFiles.dataFile();
+        File indexFile = segmentFiles.indexFile();
+        File bloomFilterFile = segmentFiles.bloomFilterFile();
+        Segment<K> segment = table.write(entries, dataFile, indexFile, bloomFilterFile, sampleEvery, level+1);
+
+        return segment;
     }
 }

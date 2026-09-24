@@ -171,24 +171,80 @@ exist to have something to measure, and should reflect the final, concurrent-saf
         one of the `LeveledCompactionStrategy` bugs above) and fixed.
       - [x] `flush()` tags new segments `level=0` and sets exact `minKey`/`maxKey` from
         `memTableEntries` (exact, not just a safe bound, since nothing is elided on a raw flush).
-      - **Reconsidered: `minKey`/`maxKey` are NOT persisted to the segment header.** The original
-        plan (same principle as `maxEventId`, in the header, read back by `recover()`) would have
-        touched five separate read call sites (`SSTable.readAll`/`rangeCursor`, `DataFileCursor`,
-        `RangeCursor`, `LSMTree.recover()`) — the exact shape of gap that caused 14 failing tests
-        the first time a header field was added. Reconsidered because the values are derivable
-        cheaply enough not to need it: every other place a `Segment` is built already computes
-        `minKey`/`maxKey` once from entries already in hand and just keeps them in memory (same
-        pattern as `loadedIndex`/`bloomFilter` — computed once, cached, never re-read from disk).
-        The only place that needs to *derive* rather than carry forward is `recover()`: `minKey`
-        is free (first entry, right after the header); `maxKey` is a bounded scan from the sparse
-        index's last sample to EOF (at most `sampleEvery` entries), not a full scan — unlike
-        `entryCount`/`maxEventId`, which genuinely can't be bounded this way (entries are sorted by
-        key, not write order, so finding the max event id without persisting it means scanning
-        every entry). Still open: wiring this derivation into `recover()`.
-      - [ ] Still open: `LeveledMergeStrategy` doesn't yet partition its output into multiple
-        bounded-size segments — it writes exactly one segment per merge (the file-factory plumbing
-        above is the prerequisite for this and is now in place; the partitioning loop itself, and
-        the target-file-size parameter it needs, aren't built yet).
+      - [x] **Reconsidered: `minKey`/`maxKey` are NOT persisted to the segment header.** The
+        original plan (same principle as `maxEventId`, in the header, read back by `recover()`)
+        would have touched five separate read call sites — the exact shape of gap that caused 14
+        failing tests the first time a header field was added. Reconsidered because the values are
+        derivable cheaply enough not to need it: every other place a `Segment` is built already
+        computes `minKey`/`maxKey` once from entries already in hand and just keeps them in memory
+        (same pattern as `loadedIndex`/`bloomFilter`). The only place that needs to *derive* rather
+        than carry forward is `recover()`: `minKey` is free (first entry, right after the header,
+        via the sparse index's first sample — no data-file read needed at all); `maxKey` is a
+        bounded scan from the sparse index's last sample to EOF (at most `sampleEvery` entries),
+        not a full scan — unlike `entryCount`/`maxEventId`, which genuinely can't be bounded this
+        way (entries are sorted by key, not write order). `SSTable.minKey()`/`maxKey()` built and
+        verified (including the specific bounded-scan case where the last index sample sits
+        several entries short of true EOF); one real bug found and fixed (the accumulator variable
+        was scoped inside the read loop instead of outside, so it reset to `null` every iteration —
+        always returned `null` regardless of what was actually read).
+      - [x] **`level` — reconsidered the *opposite* way, and persisted after all.** Unlike
+        `minKey`/`maxKey`, `level` isn't a property of a segment's content at all — it's pure
+        external metadata about its position in the compaction hierarchy, assigned by whichever
+        operation created it. Nothing in the segment's bytes can ever reveal it, so there's no
+        derivation option here; it has to be persisted. Lower risk than the minKey/maxKey plan
+        would have been, though — one fixed-size `int`, known up front (same as `entryCount`
+        already works), not two variable-length fields. New header layout:
+        `entryCount, level, maxEventId`. Three real bugs found and fixed while landing this, all
+        stemming from the same root cause — every reader of the header has to agree on the new
+        layout, and three different call sites didn't at various points: (1) `SSTable.write()`'s
+        first attempt at writing the new field opened a *second*, independent `RandomAccessFile`
+        handle for the header instead of reusing the one already writing entries — two handles
+        with two independent file positions on the same file, so the entry-writing loop
+        overwrote the header it had just written; fixed by passing the existing handle through
+        instead of opening a new one. (2) `DataFileCursor` and (3) `RangeCursor` were never
+        updated to skip the new field at all — both misaligned every read after the header,
+        surfacing as `EOFException`s and garbage decoded keys, but invisible until the full test
+        suite could compile and actually exercise them (it couldn't, for unrelated reasons, until
+        this same session). `LSMTree.recover()`'s own inline header read had the identical
+        misalignment bug (silently corrupting recovered segments' `maxEventId` to `0`, which feeds
+        `eventCounter` restoration) — fixed by consolidating entryCount/level/maxEventId into one
+        `SSTable.getMetaData()` call returning a `DataFileMetaData` record, replacing both the
+        ad-hoc inline read and the separate `getLevel()` call, so there's one place that knows the
+        header layout instead of several independently-written ones for this call site specifically.
+      - [x] `LeveledMergeStrategy` partitions its output into multiple bounded-size segments.
+        New `targetSegmentSizeBytes` constructor parameter (distinct from
+        `LeveledCompactionStrategy`'s level-size triggers — that's "is the whole level too big,"
+        this is "how big should one file within it be"). Merge cursor driven manually (buffer
+        entries, track cumulative estimated bytes, flush a partition once the target is crossed),
+        each partition tagged with its *own* `minKey`/`maxKey` (the first/last key actually
+        buffered into it — entries arrive pre-sorted from the merge cursor, so no comparison logic
+        needed, just track first-seen/most-recent) rather than the union of all inputs, which
+        would no longer be correct once output splits into more than one segment. Four real bugs
+        found and fixed along the way: (1) the union-of-inputs `minKey`/`maxKey` computation
+        (kept temporarily during the refactor) had the same wrong-field typo recur a third time,
+        in a new shape (a for-loop this time, not a stream `.max()`); (2) the tail buffer was
+        never flushed after the merge cursor was exhausted — any compaction whose total size
+        wasn't an exact multiple of the target lost its last partial segment's worth of data
+        entirely, proven with a probe showing 3 real entries reduced to zero output segments;
+        (3) traced a `level=0` result on every output partition back to its true root cause in
+        `SSTable.write()` itself, not `LeveledMergeStrategy` — `write()` took `level` as a
+        parameter and persisted it to the file header correctly, but never called
+        `segment.setLevel(level)` on the in-memory `Segment` object it returned, so every caller
+        relying on the returned object's level (not just this one) silently got `0` regardless of
+        what was passed in or persisted — `flush()` had the same bug but it was invisible there
+        since `0` is genuinely flush()'s correct level. Fixed at the source (`SSTable.write()`)
+        rather than papering over it in each caller. Verified via a multi-partition probe: 7
+        partitions from 50 entries, exact entry accounting, strictly ascending non-overlapping
+        ranges, correct level on every partition.
+      - Considered and declined: bringing `flush()` in line with `sharedCompactionLogic()`'s
+        WIP-staged file-factory pattern for consistency. Traced through every crash window for
+        `flush()`'s current (simpler, no-WIP-staging) approach and found none that lose data or
+        leave the tree in a wrong state — a `flush()` that fails or crashes at any point before
+        `wal.reset()` just means WAL replay redoes the work on recovery, since `flush()` is a
+        cache/optimization over the WAL's actual durability guarantee, not a second durability
+        mechanism in its own right. No correctness reason found to change it; the only argument
+        for doing so would have been uniformity between the two write paths, which wasn't judged
+        worth the added complexity.
       - [ ] Still open: **`get()`/`scan()` becoming level-aware** — the part that makes the whole
         thing real rather than theoretical: without it, leveled compaction pays its write-amp cost
         with no read-amp payoff to show for it. L0 stays a bloom-filter-gated linear scan,

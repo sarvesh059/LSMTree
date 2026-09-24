@@ -86,7 +86,9 @@ public class SSTable<K extends Comparable<K>> {
             indexFileWriter.getFD().sync();
             bloomFilterWriter.getFD().sync();
         }
-        return new Segment<>(dataFile, indexEntries, bloomFilter, newEntriesAdded, maxEventId);
+        Segment<K> segment = new Segment<>(dataFile, indexEntries, bloomFilter, newEntriesAdded, maxEventId);
+        segment.setLevel(level);
+        return segment;
     }
 
     private void updateDataFileMetaData(int entryCount, int level, long maxEventId, RandomAccessFile dataFileWriter) throws IOException{
