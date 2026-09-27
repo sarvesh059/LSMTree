@@ -589,7 +589,7 @@ public class LSMTreeTest {
             firstSession.put(2, singleByteValue(2));
         }
 
-        assertFalse(Files.exists(dir.resolve("manifest.log")));
+        assertFalse(Files.exists(dir.resolve("manifest.log", "sanity check: two small puts must stay under threshold and never trigger a flush")));
 
         try (LSMTree<Integer> secondSession = new LSMTree<>(new IntegerKeyCodec(), dir, SAMPLE_EVERY, THRESHOLD,
                 new FullCompactStrategy<>(1000), new FullLoadMergeStrategy<>(new IntegerKeyCodec()))) {
