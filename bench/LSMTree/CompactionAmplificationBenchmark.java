@@ -1,12 +1,12 @@
 package LSMTree;
 
-import compactation.CompactStrategyImpl.FullCompactStrategy;
-import compactation.CompactStrategyImpl.LeveledCompactionStrategy;
-import compactation.CompactStrategyImpl.SizeTieredCompactStrategy;
-import compactation.CompactionStrategy;
-import compactation.MergeStrategy;
-import compactation.MergeStrategyImpl.FullLoadMergeStrategy;
-import compactation.MergeStrategyImpl.LeveledMergeStrategy;
+import compaction.CompactStrategyImpl.FullCompactStrategy;
+import compaction.CompactStrategyImpl.LeveledCompactionStrategy;
+import compaction.CompactStrategyImpl.SizeTieredCompactStrategy;
+import compaction.CompactionStrategy;
+import compaction.MergeStrategy;
+import compaction.MergeStrategyImpl.FullLoadMergeStrategy;
+import compaction.MergeStrategyImpl.LeveledMergeStrategy;
 import core.Segment;
 import core.SegmentFiles;
 import core.Value;

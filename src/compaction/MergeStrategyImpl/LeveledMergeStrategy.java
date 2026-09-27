@@ -1,8 +1,8 @@
-package compactation.MergeStrategyImpl;
+package compaction.MergeStrategyImpl;
 
 import RBT.Entry;
 import SSTable.SSTable;
-import compactation.MergeStrategy;
+import compaction.MergeStrategy;
 import core.Segment;
 import core.SegmentFiles;
 import core.Value;
@@ -13,7 +13,6 @@ import cursor.MergeCursor;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.function.Supplier;
 

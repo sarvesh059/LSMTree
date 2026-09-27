@@ -1,4 +1,4 @@
-package compactation.CompactStrategyImpl;
+package compaction.CompactStrategyImpl;
 
 import bloomFilter.BloomFilter;
 import core.Segment;
@@ -27,7 +27,7 @@ public class SizeTieredCompactStrategyTest {
     private Segment<Integer> segmentOfSize(int size) throws IOException {
         Path f = tempDir.resolve("seg-" + UUID.randomUUID());
         Files.write(f, new byte[size]);
-        return new Segment<>(f.toFile(), List.of(), new BloomFilter(1, 0.02), 1, 0);
+        return new Segment<>(f.toFile(), f.toFile(), f.toFile(), List.of(), new BloomFilter(1, 0.02), 1, 0);
     }
 
     @Test

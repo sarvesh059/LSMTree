@@ -3,11 +3,15 @@ package core;
 import bloomFilter.BloomFilter;
 
 import java.io.File;
+import java.nio.file.Files;
+import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class Segment<K> {
     private final File dataFile;
+    private final File indexFile;
+    private final File bloomFilterFile;
     private final List<IndexEntry> loadedIndex;
     private final BloomFilter bloomFilter;
     private final int entryCount;
@@ -19,8 +23,10 @@ public class Segment<K> {
     private volatile boolean isDeleted;
 
 
-    public Segment(File dataFile, List<IndexEntry> loadedIndex, BloomFilter bloomFilter, int entryCount, long maxEventId) {
+    public Segment(File dataFile, File indexFile, File bloomFilterFile, List<IndexEntry> loadedIndex, BloomFilter bloomFilter, int entryCount, long maxEventId) {
         this.dataFile = dataFile;
+        this.indexFile = indexFile;
+        this.bloomFilterFile = bloomFilterFile;
         this.loadedIndex = loadedIndex;
         this.bloomFilter = bloomFilter;
         this.entryCount = entryCount;
@@ -31,6 +37,20 @@ public class Segment<K> {
 
     public File getDataFile() {
         return dataFile;
+    }
+
+    public File getIndexFile() {
+        return indexFile;
+    }
+
+    public File getBloomFilterFile() {
+        return bloomFilterFile;
+    }
+
+    public void deleteFiles() throws IOException {
+        Files.deleteIfExists(dataFile.toPath());
+        Files.deleteIfExists(indexFile.toPath());
+        Files.deleteIfExists(bloomFilterFile.toPath());
     }
 
     public List<IndexEntry> getLoadedIndex() {

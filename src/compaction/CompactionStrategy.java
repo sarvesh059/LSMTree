@@ -1,4 +1,4 @@
-package compactation;
+package compaction;
 
 import core.Segment;
 

@@ -1,7 +1,7 @@
 package LSMTree;
 
-import compactation.CompactStrategyImpl.FullCompactStrategy;
-import compactation.MergeStrategyImpl.FullLoadMergeStrategy;
+import compaction.CompactStrategyImpl.FullCompactStrategy;
+import compaction.MergeStrategyImpl.FullLoadMergeStrategy;
 import core.Value;
 import core.key.KeyCodecImpl.IntegerKeyCodec;
 

@@ -1,8 +1,8 @@
 package LSMTree;
 
 import RBT.Entry;
-import compactation.CompactStrategyImpl.FullCompactStrategy;
-import compactation.MergeStrategyImpl.FullLoadMergeStrategy;
+import compaction.CompactStrategyImpl.FullCompactStrategy;
+import compaction.MergeStrategyImpl.FullLoadMergeStrategy;
 import core.Value;
 import core.key.KeyCodecImpl.IntegerKeyCodec;
 import cursor.EntrySource;
@@ -10,7 +10,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.HashMap;

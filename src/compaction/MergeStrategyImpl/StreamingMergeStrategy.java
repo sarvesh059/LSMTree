@@ -1,9 +1,9 @@
-package compactation.MergeStrategyImpl;
+package compaction.MergeStrategyImpl;
 
 import core.SegmentFiles;
 import cursor.EntrySource;
 import SSTable.SSTable;
-import compactation.MergeStrategy;
+import compaction.MergeStrategy;
 import core.Segment;
 import core.key.KeyCodec;
 import cursor.MergeCursor;

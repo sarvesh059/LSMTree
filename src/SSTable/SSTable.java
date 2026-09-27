@@ -86,7 +86,7 @@ public class SSTable<K extends Comparable<K>> {
             indexFileWriter.getFD().sync();
             bloomFilterWriter.getFD().sync();
         }
-        Segment<K> segment = new Segment<>(dataFile, indexEntries, bloomFilter, newEntriesAdded, maxEventId);
+        Segment<K> segment = new Segment<>(dataFile, indexFile, bloomFilterFile, indexEntries, bloomFilter, newEntriesAdded, maxEventId);
         segment.setLevel(level);
         return segment;
     }

@@ -1,6 +1,6 @@
-package compactation.CompactStrategyImpl;
+package compaction.CompactStrategyImpl;
 
-import compactation.CompactionStrategy;
+import compaction.CompactionStrategy;
 import core.Segment;
 
 import java.util.ArrayList;

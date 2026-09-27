@@ -1,4 +1,4 @@
-package compactation.MergeStrategyImpl;
+package compaction.MergeStrategyImpl;
 
 import RBT.Entry;
 import SSTable.SSTable;

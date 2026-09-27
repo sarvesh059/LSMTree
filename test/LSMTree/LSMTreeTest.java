@@ -1,10 +1,10 @@
 package LSMTree;
 
 import RBT.Entry;
-import compactation.CompactStrategyImpl.FullCompactStrategy;
-import compactation.CompactStrategyImpl.SizeTieredCompactStrategy;
-import compactation.MergeStrategyImpl.FullLoadMergeStrategy;
-import compactation.MergeStrategyImpl.StreamingMergeStrategy;
+import compaction.CompactStrategyImpl.FullCompactStrategy;
+import compaction.CompactStrategyImpl.SizeTieredCompactStrategy;
+import compaction.MergeStrategyImpl.FullLoadMergeStrategy;
+import compaction.MergeStrategyImpl.StreamingMergeStrategy;
 import core.Value;
 import core.key.KeyCodecImpl.IntegerKeyCodec;
 import cursor.EntrySource;

@@ -46,7 +46,7 @@ src/
   WAL/            write-ahead log
   SSTable/        on-disk segment read/write, range cursors
   bloomFilter/    FNV-1a double-hashing bloom filter
-  compactation/   CompactionStrategy / MergeStrategy and their implementations
+  compaction/   CompactionStrategy / MergeStrategy and their implementations
   cursor/         merge/range/data-file cursors (k-way heap merge, etc.)
   core/           Value, Segment, IndexEntry and other shared types
   manifest/       manifest log (which segment files are live)
