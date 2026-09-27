@@ -580,4 +580,22 @@ public class LSMTreeTest {
         }
     }
 
+    @Test
+    void reopeningTreeWithNoManifestFileRecoversMemTableCorrectlyFromWAl() throws IOException{
+        Path dir = dataDir.resolve("wal-recover");
+        try (LSMTree<Integer> firstSession = new LSMTree<>(new IntegerKeyCodec(), dir, SAMPLE_EVERY, THRESHOLD,
+                new FullCompactStrategy<>(1000), new FullLoadMergeStrategy<>(new IntegerKeyCodec()))) {
+            firstSession.put(1, singleByteValue(1));
+            firstSession.put(2, singleByteValue(2));
+        }
+
+        assertFalse(Files.exists(dir.resolve("manifest.log")));
+
+        try (LSMTree<Integer> secondSession = new LSMTree<>(new IntegerKeyCodec(), dir, SAMPLE_EVERY, THRESHOLD,
+                new FullCompactStrategy<>(1000), new FullLoadMergeStrategy<>(new IntegerKeyCodec()))) {
+            assertEquals(singleByteValue(1), secondSession.get(1), "Reopening tree should recover memTable from WAl correctly");
+            assertEquals(singleByteValue(2), secondSession.get(2), "Reopening tree should recover memTable from WAl correctly");
+        }
+    }
+
 }
