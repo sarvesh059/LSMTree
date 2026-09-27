@@ -1,7 +1,6 @@
 package cursor;
 
 import RBT.Entry;
-import core.Pair;
 import core.Value;
 
 import java.io.IOException;
@@ -17,9 +16,21 @@ public class MergeCursor<K extends Comparable<K>> implements EntrySource<K>{
     });
 
     private final EntrySource<K>[] cursors;
+    private final Runnable onClose;
+
+    public MergeCursor(List<EntrySource<K>> sources, Runnable onClose) throws IOException {
+        this.cursors = sources.toArray(new EntrySource[0]);
+        this.onClose = onClose;
+        initialiseCursors();
+    }
 
     public MergeCursor(List<EntrySource<K>> sources) throws IOException {
         this.cursors = sources.toArray(new EntrySource[0]);
+        this.onClose = () -> {};
+        initialiseCursors();
+    }
+
+    private void initialiseCursors() throws IOException {
         for (int i = 0; i < cursors.length; i++) {
             if (cursors[i].hasNext()){
                 Entry<K, Value> entry = cursors[i].next();
@@ -27,6 +38,7 @@ public class MergeCursor<K extends Comparable<K>> implements EntrySource<K>{
             }
         }
     }
+
 
 
     @Override
@@ -69,5 +81,6 @@ public class MergeCursor<K extends Comparable<K>> implements EntrySource<K>{
         for (EntrySource<K> cursor : cursors) {
             cursor.close();
         }
+        this.onClose.run();
     }
 }

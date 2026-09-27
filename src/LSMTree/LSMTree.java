@@ -35,6 +35,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
     private static final String WIP_FILE_PREFIX = "WIP-";
     private static final String DELETED_FILE_PREFIX = "DELETED-";
     private static final String BLOOM_FILTER_FILE_PREFIX = "bloomFilter-";
+    private static final long STALE_PIN_WARNING_THRESHOLD_IN_MILLIS = 30_000;
     private final KeyCodec<K> codec;
     private final Path dataDir;
     private final WAL<K> wal;
@@ -50,6 +51,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
     private final ExecutorService compactionExecutor = Executors.newSingleThreadExecutor();
     private volatile boolean compactionInProgress = false;
     private final Object manifestLock = new Object();
+    private final Map<Object, Long> openVersionPins = new ConcurrentHashMap<>();
 
     public LSMTree(KeyCodec<K> codec, Path dataDir, int indexSampleRate, int memTableThreshold, CompactionStrategy<K> compactionStrategy, MergeStrategy<K> mergeStrategy) throws IOException {
         Files.createDirectories(dataDir);
@@ -69,7 +71,8 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
     }
 
     synchronized void flush() throws IOException {
-        MemTable<K> memTable = this.version.get().memTable();
+        Version<K> currentVersion = this.version.get();
+        MemTable<K> memTable = currentVersion.memTable();
         if (memTable.getSizeInBytes() == 0) return;
 
         List<Entry<K, Value>> memTableEntries = memTable.entries();
@@ -128,9 +131,6 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         if (value != null) return value;
 
         List<Segment<K>> segmentsSnapshot = new ArrayList<>(currentVersion.segments());
-        byte[] encodedKey = this.codec.encodeKey(key);
-        long maxEventId = -1L;
-        Value resultValue = null;
         segmentsSnapshot.sort((a, b) -> {
             if (a.getLevel() == b.getLevel()) {
                 return this.codec.compareEncoded(a.getMinKey(), b.getMinKey());
@@ -138,25 +138,30 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
                 return Integer.compare(a.getLevel(), b.getLevel());
             }
         });
-        for (Segment<K> segment : segmentsSnapshot) {
-            if(this.codec.compareEncoded(encodedKey,segment.getMinKey()) < 0 ||
-                    this.codec.compareEncoded(encodedKey, segment.getMaxKey()) > 0 ||
-                    !segment.getBloomFilter().mightContain(encodedKey)) continue;
-            this.segmentsConsultedCount++;
-            Value segmentValue = this.ssTable.get(key, segment.getDataFile(), segment.getLoadedIndex());
-            if(segmentValue != null){
-                if(segment.getLevel() == 0){
-                    if(segmentValue.getId() > maxEventId){
-                        maxEventId = segmentValue.getId();
-                        resultValue = segmentValue;
+        byte[] encodedKey = this.codec.encodeKey(key);
+
+        return withPinnedSegments(segmentsSnapshot, pinnedSegments -> {
+            Value resultValue = null;
+            long maxEventId = -1L;
+            for (Segment<K> segment : pinnedSegments) {
+                if(this.codec.compareEncoded(encodedKey,segment.getMinKey()) < 0 ||
+                        this.codec.compareEncoded(encodedKey, segment.getMaxKey()) > 0 ||
+                        !segment.getBloomFilter().mightContain(encodedKey)) continue;
+                this.segmentsConsultedCount++;
+                Value segmentValue = this.ssTable.get(key, segment.getDataFile(), segment.getLoadedIndex());
+                if(segmentValue != null){
+                    if(segment.getLevel() == 0){
+                        if(segmentValue.getId() > maxEventId){
+                            maxEventId = segmentValue.getId();
+                            resultValue = segmentValue;
+                        }
+                    }else{
+                        return resultValue != null ? resultValue : segmentValue;
                     }
-                }else{
-                    return resultValue != null ? resultValue : segmentValue;
                 }
             }
-        }
-
-        return resultValue;
+            return resultValue;
+        });
     }
 
     void recover() throws IOException {
@@ -167,12 +172,16 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         List<Segment<K>> segments = new ArrayList<>(currentVersion.segments());
         List<String> dataFilesNames = Manifest.readAll(manifestFile);
         LinkedHashSet<String> liveDataFiles = new LinkedHashSet<>();
+        LinkedHashSet<String> pendingDeletionDataFiles = new LinkedHashSet<>();
         for (String fileName : dataFilesNames) {
             if (fileName.startsWith(WIP_FILE_PREFIX)) continue;
             if (fileName.startsWith(DELETED_FILE_PREFIX)) {
-                liveDataFiles.remove(fileName.substring(DELETED_FILE_PREFIX.length()));
+                String underlyingName = fileName.substring(DELETED_FILE_PREFIX.length());
+                liveDataFiles.remove(underlyingName);
+                pendingDeletionDataFiles.add(underlyingName);
             } else {
                 liveDataFiles.add(fileName);
+                pendingDeletionDataFiles.remove(fileName);
             }
         }
 
@@ -202,7 +211,23 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         MemTable<K> newMemTable = new MemTable<>(this.memTableThreshold);
         this.wal.replay(newMemTable);
         this.version.updateAndGet((_) -> new Version<K>(newMemTable, segments));
-        
+
+        // Nothing survives a restart to hold a pin, so anything still marked DELETED at this
+        // point is unconditionally safe to purge -- it was only left behind because the process
+        // exited before a prior cleanUp() call got to it.
+        for (String dataFileName : pendingDeletionDataFiles) {
+            try {
+                deleteSegmentFilesByName(dataFileName);
+            } catch (IOException e) {
+                System.err.println("WARNING: failed to physically delete orphaned segment file "
+                        + dataFileName + " left over from a prior crash: " + e.getMessage());
+            }
+        }
+        if (!pendingDeletionDataFiles.isEmpty()) {
+            synchronized (this.manifestLock) {
+                Manifest.rewrite(new ArrayList<>(liveDataFiles), manifestFile);
+            }
+        }
 
         maxEventId = Math.max(maxEventId, this.wal.getLatestEventId());
         this.eventCounter.set(maxEventId);
@@ -221,10 +246,56 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
 
     private void cleanUp() throws IOException {
         Version<K> currentVersion = this.version.get();
-        List<String> dataFileNames = currentVersion.segments().stream().map(kSegment -> kSegment.getDataFile().getName()).toList();
-        synchronized (this.manifestLock) {
-            Manifest.rewrite(dataFileNames, this.dataDir.resolve(MANIFEST_FILE_NAME).toFile());
+        List<Segment<K>> purgedSegments = new ArrayList<>();
+        List<String> manifestEntries = new ArrayList<>();
+
+        for (Segment<K> segment : currentVersion.segments()) {
+            if (!segment.isDeleted()) {
+                manifestEntries.add(segment.getDataFile().getName());
+                continue;
+            }
+            if (segment.tryClaimForDeletion()) {
+                try {
+                    deleteSegmentFiles(segment);
+                } catch (IOException e) {
+                    System.err.println("WARNING: failed to physically delete segment file "
+                            + segment.getDataFile().getName() + ": " + e.getMessage()
+                            + " -- it will no longer be tracked, but a stray file may remain on disk");
+                }
+                purgedSegments.add(segment);
+            } else {
+                manifestEntries.add(DELETED_FILE_PREFIX + segment.getDataFile().getName());
+            }
         }
+
+        synchronized (this.manifestLock) {
+            Manifest.rewrite(manifestEntries, this.dataDir.resolve(MANIFEST_FILE_NAME).toFile());
+        }
+
+        if (!purgedSegments.isEmpty()) {
+            this.version.updateAndGet(v -> {
+                List<Segment<K>> newList = new ArrayList<>(v.segments());
+                newList.removeAll(purgedSegments);
+                return new Version<>(v.memTable(), newList);
+            });
+        }
+
+        long oldestPinAge = oldestOpenPinAgeInMillis();
+        if (oldestPinAge > STALE_PIN_WARNING_THRESHOLD_IN_MILLIS) {
+            System.err.println("WARNING: a scan() snapshot has been held open for " + oldestPinAge
+                    + "ms, delaying physical segment-file deletion for whatever it's still referencing");
+        }
+    }
+
+    private void deleteSegmentFiles(Segment<K> segment) throws IOException {
+        deleteSegmentFilesByName(segment.getDataFile().getName());
+    }
+
+    private void deleteSegmentFilesByName(String dataFileName) throws IOException {
+        String suffix = dataFileName.substring(DATA_FILE_PREFIX.length());
+        Files.deleteIfExists(this.dataDir.resolve(dataFileName));
+        Files.deleteIfExists(this.dataDir.resolve(INDEX_FILE_PREFIX + suffix));
+        Files.deleteIfExists(this.dataDir.resolve(BLOOM_FILTER_FILE_PREFIX + suffix));
     }
 
     synchronized void compact() throws IOException {
@@ -256,6 +327,8 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
             );
         };
 
+        selectedSegments.forEach(Segment::pin);
+
         List<Segment<K>> wipSegments = this.mergeStrategy.merge(selectedSegments, fileFactory, this.indexSampleRate);
         List<Segment<K>> newSegments = new ArrayList<>();
         List<String> newDataFileNames = new ArrayList<>();
@@ -276,12 +349,13 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
             newDataFileNames.add(dataFileName);
         }
 
+        selectedSegments.forEach(Segment::unpin);
         this.version.updateAndGet((currentVersion) -> {
             List<Segment<K>> newSegmentList = new ArrayList<>(currentVersion.segments());
-            newSegmentList.removeAll(selectedSegments);
             newSegmentList.addAll(newSegments);
             return new Version<>(currentVersion.memTable(), newSegmentList);
         });
+        selectedSegments.forEach(Segment::markDeleted);
 
         synchronized (this.manifestLock) {
             for (String dataFileName : newDataFileNames) {
@@ -316,15 +390,32 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
     EntrySource<K> scan(K low, K high) throws IOException{
         List<EntrySource<K>> cursors = new ArrayList<>();
         Version<K> currentVersion = this.version.get();
-        for(Segment<K> segment : currentVersion.segments()){
-            if(this.codec.compareEncoded(this.codec.encodeKey(low),segment.getMaxKey())>0 || this.codec.compareEncoded(this.codec.encodeKey(high),segment.getMinKey())<0) continue;
-            cursors.add(this.ssTable.rangeCursor(segment.getDataFile(),segment.getLoadedIndex(), this.codec.encodeKey(low), this.codec.encodeKey(high)));
+        List<Segment<K>> pinnedSegments = new ArrayList<>();
+        Object token = trackOpenScanPin();
+
+        try {
+            byte[] encodedLow = this.codec.encodeKey(low);
+            byte[] encodedHigh = this.codec.encodeKey(high);
+            for(Segment<K> segment : currentVersion.segments()){
+                if(segment.isDeleted()) continue;
+                if(this.codec.compareEncoded(encodedLow,segment.getMaxKey())>0 || this.codec.compareEncoded(encodedHigh,segment.getMinKey())<0) continue;
+                if(!segment.pin()) continue;
+                pinnedSegments.add(segment);
+                cursors.add(this.ssTable.rangeCursor(segment.getDataFile(),segment.getLoadedIndex(), encodedLow, encodedHigh));
+            }
+
+            List<Entry<K, Value>> memTableEntries = currentVersion.memTable().range(low, high);
+            cursors.add(this.ssTable.memTableCursor(memTableEntries));
+
+            return new MergeCursor<>(cursors, () -> {
+                pinnedSegments.forEach(Segment::unpin);
+                untrackOpenScanPin(token);
+            });
+        } catch (Throwable t) {
+            pinnedSegments.forEach(Segment::unpin);
+            untrackOpenScanPin(token);
+            throw t;
         }
-
-        List<Entry<K, Value>> memTableEntries = currentVersion.memTable().range(low, high);;
-        cursors.add(this.ssTable.memTableCursor(memTableEntries));
-
-        return new MergeCursor<>(cursors);
     }
 
     @Override
@@ -375,5 +466,45 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
 
     List<Segment<K>> segments() {
         return this.version.get().segments();
+    }
+
+    private <T> T withPinnedSegments(List<Segment<K>> candidates, PinnedSegmentsAction<K, T> body) throws IOException {
+        List<Segment<K>> pinnedSegments = new ArrayList<>();
+        for (Segment<K> segment : candidates) {
+            if (segment.isDeleted()) continue;
+            if (!segment.pin()) continue;
+            pinnedSegments.add(segment);
+        }
+        try {
+            return body.apply(pinnedSegments);
+        } finally {
+            pinnedSegments.forEach(Segment::unpin);
+        }
+    }
+
+    private interface PinnedSegmentsAction<K, T> {
+        T apply(List<Segment<K>> pinnedSegments) throws IOException;
+    }
+
+    Object trackOpenScanPin(){
+        Object token = new Object();
+        openVersionPins.put(token, System.nanoTime());
+        return token;
+    }
+
+    void untrackOpenScanPin(Object token){
+        openVersionPins.remove(token);
+    }
+
+    int openVersionPinCount() {
+        return this.openVersionPins.size();
+    }
+
+    long oldestOpenPinAgeInMillis(){
+        long now = System.nanoTime();
+        return openVersionPins.values().stream()
+                .mapToLong(startTime -> (now-startTime)/1_000_000 )
+                .max()
+                .orElse(-1);
     }
 }

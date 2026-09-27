@@ -335,7 +335,7 @@ public class LSMTreeTest {
             tree.compact();
 
             File[] afterCompact = dataFiles(dir);
-            assertEquals(3, afterCompact.length, "old segment files remain on disk -- physical cleanup isn't implemented yet");
+            assertEquals(1, afterCompact.length, "old segment files should be physically deleted once compaction completes and nothing still references them");
 
             File mergedFile = Arrays.stream(afterCompact)
                     .filter(f -> !preCompactNames.contains(f.getName()))

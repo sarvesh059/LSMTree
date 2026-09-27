@@ -4,6 +4,7 @@ import bloomFilter.BloomFilter;
 
 import java.io.File;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class Segment<K> {
     private final File dataFile;
@@ -14,6 +15,8 @@ public class Segment<K> {
     private int level;
     private byte[] minKey;
     private byte[] maxKey;
+    private final AtomicInteger refCount;
+    private volatile boolean isDeleted;
 
 
     public Segment(File dataFile, List<IndexEntry> loadedIndex, BloomFilter bloomFilter, int entryCount, long maxEventId) {
@@ -22,6 +25,8 @@ public class Segment<K> {
         this.bloomFilter = bloomFilter;
         this.entryCount = entryCount;
         this.maxEventId = maxEventId;
+        this.refCount = new AtomicInteger(0);
+        this.isDeleted = false;
     }
 
     public File getDataFile() {
@@ -70,5 +75,34 @@ public class Segment<K> {
 
     public long getSize(){
         return this.dataFile.length();
+    }
+
+    public boolean pin() {
+        int result = refCount.updateAndGet(current -> current < 0 ? current : current + 1);
+        return result >= 0;
+    }
+
+    public void unpin(){
+        refCount.updateAndGet(current -> {
+            if (current <= 0) throw new IllegalStateException("Segment needs to be pinned before unpinning.");
+            return current - 1;
+        });
+    }
+
+    public int getRefCount(){
+        return this.refCount.get();
+    }
+
+    public void markDeleted(){
+        this.isDeleted = true;
+    }
+
+    public boolean isDeleted(){
+        return this.isDeleted;
+    }
+
+    public boolean tryClaimForDeletion(){
+        if(!isDeleted) throw new IllegalStateException("Segment hasn't been marked for deletion");
+        return this.refCount.compareAndSet(0,-1);
     }
 }
