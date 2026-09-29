@@ -27,7 +27,7 @@ public class LeveledMergeStrategy<K extends Comparable<K>> implements MergeStrat
 
 
     @Override
-    public List<Segment<K>> merge(List<Segment<K>> segments, Supplier<SegmentFiles> segmentFilesSupplier, int sampleEvery) throws IOException {
+    public List<Segment<K>> merge(List<Segment<K>> segments, List<Segment<K>> segmentSnapshot, Supplier<SegmentFiles> segmentFilesSupplier, int sampleEvery) throws IOException {
         int level = Integer.MAX_VALUE;
 
         for (Segment<K> segment : segments) {

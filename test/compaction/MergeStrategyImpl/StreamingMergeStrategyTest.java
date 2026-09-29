@@ -43,7 +43,7 @@ public class StreamingMergeStrategyTest {
         Supplier<SegmentFiles> fileFactory = () -> new SegmentFiles(outData, outIdx, outBloom);
 
         assertThrows(IOException.class,
-                () -> merger.merge(List.of(goodSegment, badSegment), fileFactory, 5),
+                () -> merger.merge(List.of(goodSegment, badSegment), List.of(goodSegment, badSegment), fileFactory, 5),
                 "a truncated entry in one segment should surface as an IOException, not be silently absorbed");
 
         assertTrue(dataGood.delete(), "the good segment's file handle should have been released despite the other segment's failure");

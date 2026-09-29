@@ -49,7 +49,7 @@ public class CompactionService<K extends Comparable<K>> {
     public synchronized void compact() throws IOException {
         List<Segment<K>> live = liveSegments(this.version.get());
         List<Segment<K>> selectedSegments = this.compactionStrategy.select(live);
-        sharedCompactionLogic(selectedSegments);
+        sharedCompactionLogic(selectedSegments, live);
     }
 
     public void checkAndCompactAsync() {
@@ -57,11 +57,16 @@ public class CompactionService<K extends Comparable<K>> {
         if (this.compactionStrategy.shouldCompact(live) && !compactionInProgress) {
             List<Segment<K>> selectedSegments = this.compactionStrategy.select(live);
             this.compactionInProgress = true;
-            compactionExecutor.submit(() -> runCompactionAsync(selectedSegments));
+            compactionExecutor.submit(() -> runCompactionAsync(selectedSegments, live));
         }
     }
 
     public void sharedCompactionLogic(List<Segment<K>> selectedSegments) throws IOException {
+        List<Segment<K>> live = liveSegments(this.version.get());
+        sharedCompactionLogic(selectedSegments, live);
+    }
+
+    public void sharedCompactionLogic(List<Segment<K>> selectedSegments, List<Segment<K>> segmentsSnapshot) throws IOException {
         File manifestFile = manifestFile();
         Supplier<SegmentFiles> fileFactory = () -> {
             String uuid = UUID.randomUUID().toString();
@@ -86,7 +91,7 @@ public class CompactionService<K extends Comparable<K>> {
 
         selectedSegments.forEach(Segment::pin);
 
-        List<Segment<K>> wipSegments = this.mergeStrategy.merge(selectedSegments, fileFactory, this.indexSampleRate);
+        List<Segment<K>> wipSegments = this.mergeStrategy.merge(selectedSegments, segmentsSnapshot, fileFactory, this.indexSampleRate);
         List<Segment<K>> newSegments = new ArrayList<>();
         List<String> newDataFileNames = new ArrayList<>();
         for (Segment<K> wipSegment : wipSegments) {
@@ -126,9 +131,9 @@ public class CompactionService<K extends Comparable<K>> {
         cleanUpService.cleanUp();
     }
 
-    private void runCompactionAsync(List<Segment<K>> selectedSegments) {
+    private void runCompactionAsync(List<Segment<K>> selectedSegments, List<Segment<K>> segmentsSnapshot) {
         try {
-            sharedCompactionLogic(selectedSegments);
+            sharedCompactionLogic(selectedSegments, segmentsSnapshot);
         } catch (Throwable _) {
 
         } finally {
@@ -138,7 +143,7 @@ public class CompactionService<K extends Comparable<K>> {
                 if (this.compactionStrategy.shouldCompact(live)) {
                     List<Segment<K>> nextSelectedSegments = this.compactionStrategy.select(live);
                     this.compactionInProgress = true;
-                    compactionExecutor.submit(() -> runCompactionAsync(nextSelectedSegments));
+                    compactionExecutor.submit(() -> runCompactionAsync(nextSelectedSegments, live));
                 }
             }
         }

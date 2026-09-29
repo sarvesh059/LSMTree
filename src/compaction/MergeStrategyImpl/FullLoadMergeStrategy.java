@@ -22,7 +22,7 @@ public class FullLoadMergeStrategy<K extends Comparable<K>> implements MergeStra
     }
 
     @Override
-    public List<Segment<K>> merge(List<Segment<K>> segments, Supplier<SegmentFiles> segmentFilesSupplier, int sampleEvery) throws IOException {
+    public List<Segment<K>> merge(List<Segment<K>> segments, List<Segment<K>> segmentSnapshot, Supplier<SegmentFiles> segmentFilesSupplier, int sampleEvery) throws IOException {
         List<List<Entry<K, Value>>> entriesList = new ArrayList<>();
 
         SSTable<K> table = new SSTable<>(this.codec);

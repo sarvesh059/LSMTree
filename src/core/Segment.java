@@ -1,6 +1,7 @@
 package core;
 
 import bloomFilter.BloomFilter;
+import core.key.KeyCodec;
 
 import java.io.File;
 import java.nio.file.Files;
@@ -125,4 +126,12 @@ public class Segment<K> {
         if(!isDeleted) throw new IllegalStateException("Segment hasn't been marked for deletion");
         return this.refCount.compareAndSet(0,-1);
     }
+
+    public boolean keyDefinitelyNotInSegment(byte[] encodedKey, KeyCodec<K> codec){
+        if(encodedKey == null || this.getMinKey() == null || this.getMaxKey() == null) return true;
+        return codec.compareEncoded(encodedKey, this.getMinKey()) < 0 ||
+                codec.compareEncoded(encodedKey, this.getMaxKey()) > 0 ||
+                !this.getBloomFilter().mightContain(encodedKey);
+    }
+
 }

@@ -23,7 +23,7 @@ public class StreamingMergeStrategy<K extends Comparable<K>> implements MergeStr
     }
 
     @Override
-    public List<Segment<K>> merge(List<Segment<K>> segments, Supplier<SegmentFiles> segmentFilesSupplier, int sampleEvery) throws IOException {
+    public List<Segment<K>> merge(List<Segment<K>> segments, List<Segment<K>> segmentSnapshot, Supplier<SegmentFiles> segmentFilesSupplier, int sampleEvery) throws IOException {
         int approxEntries = segments.stream().mapToInt(Segment::getEntryCount).sum();
         SegmentFiles segmentFiles = segmentFilesSupplier.get();
         File dataFile = segmentFiles.dataFile();

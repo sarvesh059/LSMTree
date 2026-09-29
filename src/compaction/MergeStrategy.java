@@ -8,5 +8,5 @@ import java.util.List;
 import java.util.function.Supplier;
 
 public interface MergeStrategy<K extends Comparable<K>> {
-    List<Segment<K>> merge(List<Segment<K>> segments, Supplier<SegmentFiles> segmentFilesSupplier, int sampleEvery) throws IOException;
+    List<Segment<K>> merge(List<Segment<K>> segments, List<Segment<K>> segmentSnapshot, Supplier<SegmentFiles> segmentFilesSupplier, int sampleEvery) throws IOException;
 }

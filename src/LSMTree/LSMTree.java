@@ -139,9 +139,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
             Value resultValue = null;
             long maxEventId = -1L;
             for (Segment<K> segment : pinnedSegments) {
-                if (this.codec.compareEncoded(encodedKey, segment.getMinKey()) < 0 ||
-                        this.codec.compareEncoded(encodedKey, segment.getMaxKey()) > 0 ||
-                        !segment.getBloomFilter().mightContain(encodedKey)) continue;
+                if (segment.keyDefinitelyNotInSegment(encodedKey, this.codec)) continue;
                 this.segmentsConsultedCount++;
                 Value segmentValue = this.ssTable.get(key, segment.getDataFile(), segment.getLoadedIndex());
                 if (segmentValue != null) {

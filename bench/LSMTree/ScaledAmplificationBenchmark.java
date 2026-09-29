@@ -119,7 +119,7 @@ public class ScaledAmplificationBenchmark {
         File tmpIndex = dir.resolve("full-merge-index-" + uuid).toFile();
         File tmpBloom = dir.resolve("full-merge-bloom-" + uuid).toFile();
         List<Segment<Integer>> merged = new FullLoadMergeStrategy<>(codec)
-                .merge(live, () -> new SegmentFiles(tmpData, tmpIndex, tmpBloom), SAMPLE_EVERY);
+                .merge(live, live, () -> new SegmentFiles(tmpData, tmpIndex, tmpBloom), SAMPLE_EVERY);
         long size = merged.stream().mapToLong(Segment::getSize).sum();
         Files.deleteIfExists(tmpData.toPath());
         Files.deleteIfExists(tmpIndex.toPath());
