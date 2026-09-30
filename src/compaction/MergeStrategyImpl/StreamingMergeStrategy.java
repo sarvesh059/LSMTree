@@ -1,5 +1,6 @@
 package compaction.MergeStrategyImpl;
 
+import compaction.TombStoneRetentionPolicyImpl.DropAllTombStoneRetentionPolicy;
 import core.SegmentFiles;
 import cursor.EntrySource;
 import SSTable.SSTable;
@@ -7,6 +8,7 @@ import compaction.MergeStrategy;
 import core.Segment;
 import core.key.KeyCodec;
 import cursor.MergeCursor;
+import cursor.TombStoneRetentionPolicy;
 
 import java.io.File;
 import java.io.IOException;
@@ -33,6 +35,7 @@ public class StreamingMergeStrategy<K extends Comparable<K>> implements MergeStr
         SSTable<K> table = new SSTable<>(this.codec);
 
         List<EntrySource<K>> sources = new ArrayList<>();
+        TombStoneRetentionPolicy<K> tombStoneRetentionPolicy = new DropAllTombStoneRetentionPolicy<>();
         byte[] minKey = null;
         byte[] maxKey = null;
         for (Segment<K> segment : segments) {
@@ -41,7 +44,8 @@ public class StreamingMergeStrategy<K extends Comparable<K>> implements MergeStr
             sources.add(table.openCursor(segment.getDataFile()));
         }
 
-        try (EntrySource<K> source = new MergeCursor<>(sources)) {
+
+        try (EntrySource<K> source = new MergeCursor<>(sources, tombStoneRetentionPolicy)) {
             Segment<K> segment = table.write(source, dataFile, indexFile, bloomFilterFile, sampleEvery, approxEntries,0);
             segment.setMinKey(minKey);
             segment.setMaxKey(maxKey);

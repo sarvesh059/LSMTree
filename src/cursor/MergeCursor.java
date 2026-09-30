@@ -17,16 +17,20 @@ public class MergeCursor<K extends Comparable<K>> implements EntrySource<K>{
 
     private final EntrySource<K>[] cursors;
     private final Runnable onClose;
+    private final TombStoneRetentionPolicy<K> tombStoneRetentionPolicy;
 
-    public MergeCursor(List<EntrySource<K>> sources, Runnable onClose) throws IOException {
+    public MergeCursor(List<EntrySource<K>> sources, TombStoneRetentionPolicy<K> tombStoneRetentionPolicy, Runnable onClose) throws IOException {
         this.cursors = sources.toArray(new EntrySource[0]);
         this.onClose = onClose;
+        this.tombStoneRetentionPolicy = tombStoneRetentionPolicy;
         initialiseCursors();
+
     }
 
-    public MergeCursor(List<EntrySource<K>> sources) throws IOException {
+    public MergeCursor(List<EntrySource<K>> sources, TombStoneRetentionPolicy<K> tombStoneRetentionPolicy) throws IOException {
         this.cursors = sources.toArray(new EntrySource[0]);
         this.onClose = () -> {};
+        this.tombStoneRetentionPolicy = tombStoneRetentionPolicy;
         initialiseCursors();
     }
 
@@ -43,11 +47,19 @@ public class MergeCursor<K extends Comparable<K>> implements EntrySource<K>{
 
     @Override
     public boolean hasNext() throws IOException {
-        while(!pq.isEmpty() && pq.peek().entry().getValue().isTombstone()){
-            CursorQueueEntry<K> tombstoneEntry = pq.poll();
-            moveCursor(tombstoneEntry.index());
+        while(!pq.isEmpty()){
+            if(pq.peek().entry().getValue().isTombstone()){
+                if(!this.tombStoneRetentionPolicy.shouldRetain(pq.peek().entry())){
+                    CursorQueueEntry<K> queueEntry = pq.poll();
+                    moveCursor(queueEntry.index());
+                    deduplicate(queueEntry.entry().getKey());
+                }else{
+                    break;
+                }
+            }else{
+                break;
+            }
 
-            deduplicate(tombstoneEntry.entry().getKey());
         }
         return !pq.isEmpty();
     }

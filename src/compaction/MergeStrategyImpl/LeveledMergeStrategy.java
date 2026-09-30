@@ -3,12 +3,14 @@ package compaction.MergeStrategyImpl;
 import RBT.Entry;
 import SSTable.SSTable;
 import compaction.MergeStrategy;
+import compaction.TombStoneRetentionPolicyImpl.DropAllTombStoneRetentionPolicy;
 import core.Segment;
 import core.SegmentFiles;
 import core.Value;
 import core.key.KeyCodec;
 import cursor.EntrySource;
 import cursor.MergeCursor;
+import cursor.TombStoneRetentionPolicy;
 
 import java.io.File;
 import java.io.IOException;
@@ -40,8 +42,10 @@ public class LeveledMergeStrategy<K extends Comparable<K>> implements MergeStrat
             sources.add(table.openCursor(segment.getDataFile()));
         }
 
+        TombStoneRetentionPolicy<K> tombStoneRetentionPolicy = new DropAllTombStoneRetentionPolicy<>();
+
         List<Segment<K>> newSegments = new ArrayList<>();
-        try (EntrySource<K> source = new MergeCursor<>(sources)) {
+        try (EntrySource<K> source = new MergeCursor<>(sources, tombStoneRetentionPolicy)) {
             long currentListSize = 0;
             List<Entry<K, Value>> entries = new ArrayList<>();
             while(source.hasNext()){

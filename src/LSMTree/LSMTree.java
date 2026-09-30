@@ -5,11 +5,13 @@ import SSTable.SSTable;
 import WAL.WAL;
 import compaction.CompactionStrategy;
 import compaction.MergeStrategy;
+import compaction.TombStoneRetentionPolicyImpl.DropAllTombStoneRetentionPolicy;
 import constants.FileConstants;
 import core.*;
 import core.key.KeyCodec;
 import cursor.EntrySource;
 import cursor.MergeCursor;
+import cursor.TombStoneRetentionPolicy;
 import manifest.Manifest;
 import memTable.MemTable;
 import service.CleanUpService;
@@ -43,6 +45,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
     private final CompactionService<K> compactionService;
     private final CleanUpService<K> cleanUpService;
     private final RecoveryService<K> recoveryService;
+    private final TombStoneRetentionPolicy<K> tombStoneRetentionPolicy;
 
     public LSMTree(KeyCodec<K> codec, Path dataDir, int indexSampleRate, int memTableThreshold, CompactionStrategy<K> compactionStrategy, MergeStrategy<K> mergeStrategy) throws IOException {
         Files.createDirectories(dataDir);
@@ -64,6 +67,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         long maxEventId = this.recoveryService.recover();
         this.eventCounter.set(maxEventId);
         this.compactionService.checkAndCompactAsync();
+        this.tombStoneRetentionPolicy = new DropAllTombStoneRetentionPolicy<>();
     }
 
     synchronized void flush() throws IOException {
@@ -186,7 +190,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
             List<Entry<K, Value>> memTableEntries = currentVersion.memTable().range(low, high);
             cursors.add(this.ssTable.memTableCursor(memTableEntries));
 
-            return new MergeCursor<>(cursors, () -> {
+            return new MergeCursor<>(cursors, this.tombStoneRetentionPolicy, () -> {
                 pinnedSegments.forEach(Segment::unpin);
                 untrackOpenScanPin(token);
             });
