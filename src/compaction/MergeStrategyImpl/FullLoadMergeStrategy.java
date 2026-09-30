@@ -3,15 +3,20 @@ package compaction.MergeStrategyImpl;
 import RBT.Entry;
 import SSTable.SSTable;
 import compaction.MergeStrategy;
+import compaction.TombStoneRetentionPolicyImpl.CoverageBasedTombStoneRetentionPolicy;
 import core.Segment;
 import core.SegmentFiles;
 import core.Value;
 import core.key.KeyCodec;
+import cursor.TombStoneRetentionPolicy;
 
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Supplier;
 
 public class FullLoadMergeStrategy<K extends Comparable<K>> implements MergeStrategy<K> {
@@ -36,7 +41,8 @@ public class FullLoadMergeStrategy<K extends Comparable<K>> implements MergeStra
             entriesList.add(entries);
         }
 
-        List<Entry<K,Value>> updatedEntries = kWayMerge(entriesList);
+        TombStoneRetentionPolicy<K> tombStoneRetentionPolicy = new CoverageBasedTombStoneRetentionPolicy<>(candidateSegments(segments, segmentSnapshot), codec);
+        List<Entry<K,Value>> updatedEntries = kWayMerge(entriesList, tombStoneRetentionPolicy);
 
         Segment<K> segment = table.write(updatedEntries, dataFile, indexFile, bloomFilterFile, sampleEvery, 0);
         if (!updatedEntries.isEmpty()) {
@@ -46,7 +52,7 @@ public class FullLoadMergeStrategy<K extends Comparable<K>> implements MergeStra
         return List.of(segment);
     }
 
-    List<Entry<K, Value>> kWayMerge(List<List<Entry<K, Value>>> entriesList){
+    List<Entry<K, Value>> kWayMerge(List<List<Entry<K, Value>>> entriesList, TombStoneRetentionPolicy<K> tombStoneRetentionPolicy){
         List<Entry<K, Value>> result = new ArrayList<>();
         int total = entriesList.size();
         int[] indexList = new int[total];
@@ -69,11 +75,17 @@ public class FullLoadMergeStrategy<K extends Comparable<K>> implements MergeStra
             }
             if(currentEntry == null) break;
             for (int idx : tiedIndices) indexList[idx]++;
-            if(!currentEntry.getValue().isTombstone()) result.add(currentEntry);
+            if(!currentEntry.getValue().isTombstone() || tombStoneRetentionPolicy.shouldRetain(currentEntry)) result.add(currentEntry);
             currentEntry = null;
             tiedIndices.clear();
         }
 
         return result;
+    }
+
+    private List<Segment<K>> candidateSegments(List<Segment<K>> selectedSegments,List<Segment<K>> segmentSnapshot){
+        Set<Segment<K>> segmentSet = Collections.newSetFromMap(new IdentityHashMap<>());
+        segmentSet.addAll(selectedSegments);
+        return segmentSnapshot.stream().filter(ksegment -> !ksegment.isDeleted() && !segmentSet.contains(ksegment)).toList();
     }
 }

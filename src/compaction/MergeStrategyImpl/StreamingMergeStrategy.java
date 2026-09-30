@@ -1,6 +1,6 @@
 package compaction.MergeStrategyImpl;
 
-import compaction.TombStoneRetentionPolicyImpl.DropAllTombStoneRetentionPolicy;
+import compaction.TombStoneRetentionPolicyImpl.CoverageBasedTombStoneRetentionPolicy;
 import core.SegmentFiles;
 import cursor.EntrySource;
 import SSTable.SSTable;
@@ -14,7 +14,10 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Supplier;
 
 public class StreamingMergeStrategy<K extends Comparable<K>> implements MergeStrategy<K> {
@@ -35,7 +38,7 @@ public class StreamingMergeStrategy<K extends Comparable<K>> implements MergeStr
         SSTable<K> table = new SSTable<>(this.codec);
 
         List<EntrySource<K>> sources = new ArrayList<>();
-        TombStoneRetentionPolicy<K> tombStoneRetentionPolicy = new DropAllTombStoneRetentionPolicy<>();
+        TombStoneRetentionPolicy<K> tombStoneRetentionPolicy = new CoverageBasedTombStoneRetentionPolicy<>(candidateSegments(segments, segmentSnapshot), codec);
         byte[] minKey = null;
         byte[] maxKey = null;
         for (Segment<K> segment : segments) {
@@ -51,5 +54,11 @@ public class StreamingMergeStrategy<K extends Comparable<K>> implements MergeStr
             segment.setMaxKey(maxKey);
             return List.of(segment);
         }
+    }
+
+    private List<Segment<K>> candidateSegments(List<Segment<K>> selectedSegments,List<Segment<K>> segmentSnapshot){
+        Set<Segment<K>> segmentSet = Collections.newSetFromMap(new IdentityHashMap<>());
+        segmentSet.addAll(selectedSegments);
+        return segmentSnapshot.stream().filter(ksegment -> !ksegment.isDeleted() && !segmentSet.contains(ksegment)).toList();
     }
 }

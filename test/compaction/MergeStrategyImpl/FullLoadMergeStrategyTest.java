@@ -15,16 +15,18 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.io.IOException;
-import java.io.RandomAccessFile;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.function.Supplier;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-public class StreamingMergeStrategyTest {
+public class FullLoadMergeStrategyTest {
     KeyCodec<Integer> codec;
     Path directory;
     Supplier<SegmentFiles> fileFactory;
@@ -67,42 +69,12 @@ public class StreamingMergeStrategyTest {
     }
 
     @Test
-    void cursorsAreClosedWhenAnotherSegmentFailsMidMerge(@TempDir Path dir) throws IOException {
-        SSTable<Integer> table = new SSTable<>(new IntegerKeyCodec());
-
-        var dataGood = dir.resolve("good.data").toFile();
-        var idxGood = dir.resolve("good.idx").toFile();
-        var bloomGood = dir.resolve("good.filter").toFile();
-        Segment<Integer> goodSegment = table.write(List.of(new Entry<Integer,Value>(1, Value.of(new byte[]{1})), new Entry<Integer,Value>(2, Value.of(new byte[]{2}))), dataGood, idxGood, bloomGood, 5, 0);
-
-        var dataBad = dir.resolve("bad.data").toFile();
-        var idxBad = dir.resolve("bad.idx").toFile();
-        var bloomBad = dir.resolve("bad.filter").toFile();
-        Segment<Integer> badSegment = table.write(List.of(new Entry<Integer,Value>(10, Value.of(new byte[]{10})), new Entry<Integer,Value>(11, Value.of(new byte[]{11}))), dataBad, idxBad, bloomBad, 5, 0);
-        try (RandomAccessFile raf = new RandomAccessFile(dataBad, "rw")) {
-            raf.setLength(raf.length() - 3);
-        }
-
-        StreamingMergeStrategy<Integer> merger = new StreamingMergeStrategy<>(new IntegerKeyCodec());
-        var outData = dir.resolve("out.data").toFile();
-        var outIdx = dir.resolve("out.idx").toFile();
-        var outBloom = dir.resolve("out.filter").toFile();
-        Supplier<SegmentFiles> fileFactory = () -> new SegmentFiles(outData, outIdx, outBloom);
-
-        assertThrows(IOException.class,
-                () -> merger.merge(List.of(goodSegment, badSegment), List.of(goodSegment, badSegment), fileFactory, 5),
-                "a truncated entry in one segment should surface as an IOException, not be silently absorbed");
-
-        assertTrue(dataGood.delete(), "the good segment's file handle should have been released despite the other segment's failure");
-    }
-
-    @Test
     void tombStoneKeyEntryIsRetainedWhenSameKeyEntryIsPresentInHigherLevels() throws IOException {
         Segment<Integer> newSegment = createSegment(List.of(new Entry<Integer, Value>(1, Value.tombstone(3))));
         Segment<Integer> midSegment = createSegment(List.of(new Entry<Integer, Value>(2, Value.of(2, new byte[1]))));
         Segment<Integer> oldSegment = createSegment(List.of(new Entry<Integer, Value>(1, Value.of(1, new byte[1]))));
 
-        MergeStrategy<Integer> strategy = new StreamingMergeStrategy<>(codec);
+        MergeStrategy<Integer> strategy = new FullLoadMergeStrategy<>(codec);
         List<Segment<Integer>> mergedSegments = strategy.merge(List.of(newSegment, midSegment), List.of(newSegment, midSegment, oldSegment), this.fileFactory, 5);
 
         List<Entry<Integer,Value>> entries = new ArrayList<>();
@@ -121,7 +93,7 @@ public class StreamingMergeStrategyTest {
         Segment<Integer> midSegment = createSegment(List.of(new Entry<Integer, Value>(2, Value.of(2, new byte[1]))));
         Segment<Integer> oldSegment = createSegment(List.of(new Entry<Integer, Value>(3, Value.of(1, new byte[1]))));
 
-        MergeStrategy<Integer> strategy = new StreamingMergeStrategy<>(codec);
+        MergeStrategy<Integer> strategy = new FullLoadMergeStrategy<>(codec);
         List<Segment<Integer>> mergedSegments = strategy.merge(List.of(newSegment, midSegment), List.of(newSegment, midSegment, oldSegment), this.fileFactory, 5);
 
         List<Entry<Integer,Value>> entries = new ArrayList<>();
@@ -137,7 +109,7 @@ public class StreamingMergeStrategyTest {
         Segment<Integer> newSegment = createSegment(List.of(new Entry<Integer, Value>(1, Value.tombstone(3))));
         Segment<Integer> midSegment = createSegment(List.of(new Entry<Integer, Value>(2, Value.of(2, new byte[1]))));
 
-        MergeStrategy<Integer> strategy = new StreamingMergeStrategy<>(codec);
+        MergeStrategy<Integer> strategy = new FullLoadMergeStrategy<>(codec);
         List<Segment<Integer>> mergedSegments = strategy.merge(List.of(newSegment, midSegment), List.of(newSegment, midSegment), this.fileFactory, 5);
 
         List<Entry<Integer,Value>> entries = new ArrayList<>();
@@ -153,7 +125,7 @@ public class StreamingMergeStrategyTest {
         Segment<Integer> newSegment = createSegment(List.of(new Entry<Integer, Value>(1, Value.of(2, new byte[1]))));
         Segment<Integer> oldSegment = createSegment(List.of(new Entry<Integer, Value>(1, Value.tombstone(1))));
 
-        MergeStrategy<Integer> strategy = new StreamingMergeStrategy<>(codec);
+        MergeStrategy<Integer> strategy = new FullLoadMergeStrategy<>(codec);
         List<Segment<Integer>> mergedSegments = strategy.merge(List.of(newSegment, oldSegment), List.of(newSegment, oldSegment), this.fileFactory, 5);
 
         List<Entry<Integer,Value>> entries = new ArrayList<>();
@@ -170,7 +142,7 @@ public class StreamingMergeStrategyTest {
         Segment<Integer> tombStoneSegment = createSegment(List.of(new Entry<Integer, Value>(1, Value.tombstone(3))));
         Segment<Integer> inputAtNextLevel = createSegment(List.of(new Entry<Integer, Value>(1, Value.of(2, new byte[1]))));
 
-        MergeStrategy<Integer> strategy = new StreamingMergeStrategy<>(codec);
+        MergeStrategy<Integer> strategy = new FullLoadMergeStrategy<>(codec);
         List<Segment<Integer>> mergedSegments = strategy.merge(
                 List.of(tombStoneSegment, inputAtNextLevel),
                 List.of(tombStoneSegment, inputAtNextLevel),

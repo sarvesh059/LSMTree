@@ -598,4 +598,30 @@ public class LSMTreeTest {
         }
     }
 
+    @Test
+    void sizeTieredCompactionWithFullLoadStrategyCorrectlyHandlesTombstone() throws IOException, InterruptedException {
+        Path dir = dataDir.resolve("size-tiered-noncontiguous");
+        try (LSMTree<Integer> tree = new LSMTree<>(new IntegerKeyCodec(), dir, SAMPLE_EVERY, 1_000_000,
+                new SizeTieredCompactStrategy<>(2, 0.5, 1.5), new FullLoadMergeStrategy<>(new IntegerKeyCodec()))) {
+
+            tree.put(1, Value.of(new byte[]{1, 1, 1, 1}));
+            for (int i = 1000; i < 1050; i++) tree.put(i, Value.of(new byte[200]));
+            tree.flush(); // S1: 1 entry, large -- key 1's original value
+
+            tree.put(1, Value.tombstone()); // key 1's true latest value
+            tree.flush();
+
+            tree.put(2, Value.of(new byte[]{4, 4, 4, 4})); // key 2's true latest value
+            tree.flush(); // S3: 1 entry, small (same size as S2) -- triggers auto-compaction of {S2, S3}, skipping S1
+
+            tree.awaitCompaction();
+            assertAll(
+                    () -> assertEquals(2, tree.segmentCount(), "S1 stays untouched; S3 and S2 merge into one"),
+                    () -> assertEquals(Value.tombstone(), tree.get(1),
+                            "key 1's true latest value tombstone is correctly retained"),
+                    () -> assertEquals(Value.of(new byte[]{4, 4, 4, 4}), tree.get(2),
+                            "key 2's true latest value lives in the merged segment (from S3)")
+            );
+        }
+    }
 }
