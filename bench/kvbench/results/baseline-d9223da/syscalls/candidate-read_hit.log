@@ -1,0 +1,5 @@
+INFO engine=candidate config="memtable=4MiB indexEvery=16 compaction=leveled targetFile=2MiB"
+RESULT engine=candidate phase=fill_sync ops=100000 ops_per_sec=4942 p50_us=176.33 p99_us=310.50 max_us=853655.3
+INFO engine=candidate segments_per_level={1=7}
+RESULT engine=candidate phase=settle seconds=11.873 disk_mb=12.75 logical_mb=11.06
+RESULT engine=candidate phase=read_hit ops=2000 ops_per_sec=1250 p50_us=791.92 p99_us=1758.67 max_us=7828.8

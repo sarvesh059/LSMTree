@@ -1,0 +1,4 @@
+INFO engine=leveldb config="leveldb defaults, compression=none, bloom=10bits/key"
+RESULT engine=leveldb phase=fill_sync ops=100000 ops_per_sec=5265 p50_us=166.79 p99_us=585.62 max_us=39865.6
+RESULT engine=leveldb phase=settle seconds=0.071 disk_mb=11.11 logical_mb=11.06
+RESULT engine=leveldb phase=scan100 ops=2000 ops_per_sec=122287 p50_us=7.96 p99_us=11.71 max_us=24.2

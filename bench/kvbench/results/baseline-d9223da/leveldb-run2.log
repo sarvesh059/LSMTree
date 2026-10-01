@@ -1,0 +1,8 @@
+RESULT engine=leveldb phase=fill_nosync ops=100000 ops_per_sec=961480 p50_us=0.83 p99_us=1.88 max_us=3968.0
+INFO engine=leveldb config="leveldb defaults, compression=none, bloom=10bits/key"
+RESULT engine=leveldb phase=fill_sync ops=100000 ops_per_sec=6428 p50_us=147.17 p99_us=270.38 max_us=10311.5
+RESULT engine=leveldb phase=settle seconds=0.079 disk_mb=11.11 logical_mb=11.06
+RESULT engine=leveldb phase=read_hit ops=100000 ops_per_sec=900560 p50_us=0.88 p99_us=2.33 max_us=216.2
+RESULT engine=leveldb phase=read_miss ops=100000 ops_per_sec=1910156 p50_us=0.29 p99_us=1.21 max_us=4978.8
+RESULT engine=leveldb phase=scan100 ops=10000 ops_per_sec=116440 p50_us=8.17 p99_us=16.67 max_us=107.7
+RESULT engine=leveldb phase=fill_sync_mt ops=40000 ops_per_sec=25495 writers=8

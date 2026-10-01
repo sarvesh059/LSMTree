@@ -1,0 +1,8 @@
+RESULT engine=rocksdb phase=fill_nosync ops=100000 ops_per_sec=431884 p50_us=2.17 p99_us=5.75 max_us=726.2
+INFO engine=rocksdb config="rocksdb defaults, compression=none, bloom=10bits/key"
+RESULT engine=rocksdb phase=fill_sync ops=100000 ops_per_sec=6266 p50_us=155.21 p99_us=258.46 max_us=9962.8
+RESULT engine=rocksdb phase=settle seconds=0.028 disk_mb=11.10 logical_mb=11.06
+RESULT engine=rocksdb phase=read_hit ops=100000 ops_per_sec=779755 p50_us=1.17 p99_us=1.58 max_us=26.1
+RESULT engine=rocksdb phase=read_miss ops=100000 ops_per_sec=4552499 p50_us=0.21 p99_us=0.79 max_us=10.7
+RESULT engine=rocksdb phase=scan100 ops=10000 ops_per_sec=58953 p50_us=16.79 p99_us=21.29 max_us=44.5
+RESULT engine=rocksdb phase=fill_sync_mt ops=40000 ops_per_sec=24549 writers=8

@@ -1,0 +1,4 @@
+INFO engine=rocksdb config="rocksdb defaults, compression=none, bloom=10bits/key"
+RESULT engine=rocksdb phase=fill_sync ops=100000 ops_per_sec=5878 p50_us=165.46 p99_us=280.83 max_us=8185.3
+RESULT engine=rocksdb phase=settle seconds=0.026 disk_mb=11.10 logical_mb=11.06
+RESULT engine=rocksdb phase=read_hit ops=2000 ops_per_sec=151348 p50_us=6.88 p99_us=13.58 max_us=1179.3

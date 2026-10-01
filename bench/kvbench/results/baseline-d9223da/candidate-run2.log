@@ -1,0 +1,9 @@
+RESULT engine=candidate phase=fill_nosync unsupported
+INFO engine=candidate config="memtable=4MiB indexEvery=16 compaction=leveled targetFile=2MiB"
+RESULT engine=candidate phase=fill_sync ops=100000 ops_per_sec=6254 p50_us=150.00 p99_us=261.33 max_us=145381.8
+INFO engine=candidate segments_per_level={1=7}
+RESULT engine=candidate phase=settle seconds=0.855 disk_mb=12.75 logical_mb=11.06
+RESULT engine=candidate phase=read_hit ops=100000 ops_per_sec=24680 p50_us=40.33 p99_us=74.96 max_us=16167.3
+RESULT engine=candidate phase=read_miss ops=100000 ops_per_sec=412057 p50_us=0.42 p99_us=42.83 max_us=5023.0
+RESULT engine=candidate phase=scan100 ops=10000 ops_per_sec=1164 p50_us=855.46 p99_us=936.58 max_us=5214.9
+RESULT engine=candidate phase=fill_sync_mt ops=40000 ops_per_sec=6065 writers=8
