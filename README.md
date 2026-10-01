@@ -40,7 +40,7 @@ against, how a real system handles the same problem.
 ## Project layout
 
 ```
-src/
+src/main/java/
   RBT/            persistent left-leaning red-black tree (memtable backing structure)
   memTable/       MemTable wrapper around the RBT
   WAL/            write-ahead log
@@ -52,26 +52,30 @@ src/
   manifest/       manifest log (which segment files are live)
   LSMTree/        top-level orchestration: put/get/scan/flush/compact/recover
 
-test/             JUnit 5 tests, mirroring the src/ package layout
-bench/            standalone (non-JUnit) benchmark harnesses
-docs/benchmark.md measured results for every non-trivial performance claim made above
+src/test/java/     JUnit 5 tests mirroring the package layout, plus the *Benchmark
+                   harnesses (kept here so they compile on every build and retain
+                   package-private access; Surefire excludes them from `mvn test`)
+bench/kvbench/     comparative harness: this engine vs LevelDB and RocksDB, same
+                   workload, same machine (see "Benchmarking" below)
+docs/benchmark.md  historical measurements for the performance claims above
 ```
 
 ## Building and running
 
-No build tool (Maven/Gradle) — plain `javac`/`java` against the JUnit jars in `lib/`.
+**Requires JDK 22 or newer.** The engine uses unnamed variables (`_`), finalised in Java 22;
+anything older will not compile. Maven resolves JUnit, so no jars are checked in.
 
 ```bash
-# compile
-javac -d out -cp "lib/*" $(find src -name "*.java")
+mvn test            # compile and run the test suite
+mvn -q package      # build the jar
+```
 
-# run tests (JUnit 5 console launcher, e.g. junit-platform-console-standalone)
-javac -d out -cp "lib/*:out" $(find test -name "*.java")
-java -jar junit-console.jar execute -cp out --scan-classpath --details=summary
+The `*Benchmark` classes live in `src/test/java` so they are compiled by every build but are
+excluded from `mvn test`. Run one directly against the test classpath:
 
-# run a benchmark
-javac -d out -cp "lib/*:out" $(find bench -name "*.java")
-java -cp out LSMTree.CompactionAmplificationBenchmark
+```bash
+mvn -q test-compile
+java -cp target/classes:target/test-classes LSMTree.CompactionAmplificationBenchmark
 ```
 
 ## Benchmarks
@@ -83,3 +87,30 @@ methodology, caveats, and a few honest write-ups of results that didn't match th
 hypothesis until investigated further (e.g. leveled compaction's read-amplification advantage
 over size-tiered doesn't show up until the dataset is large enough to populate more than one or
 two levels — confirmed, not assumed).
+
+## Benchmarking against LevelDB and RocksDB
+
+`bench/kvbench/` runs one fixed workload against this engine, LevelDB 1.23 and RocksDB 8.9.1 in
+the same environment and session, and writes a markdown summary. Absolute numbers vary by
+machine; the ratio to the reference engines on your machine is the comparable figure.
+
+Run it on Linux. macOS reports misleading durability numbers, because a plain `fsync()` there
+does not force the drive to flush its cache — that needs `fcntl(F_FULLFSYNC)` — so durable-write
+results measured natively on a Mac can look several times better than reality. Docker gives a
+Linux kernel on any host:
+
+```bash
+docker build -t lsm-bench bench/kvbench
+docker run --rm -it --cpuset-cpus=0 --cap-add=SYS_PTRACE \
+    -v "$PWD":/repo -v lsm-bench-data:/data -e DATA_DIR=/data/kvbench -w /repo lsm-bench \
+    bench/kvbench/scripts/run_all.sh
+```
+
+The database files must stay on the named volume (`/data`), never on the bind-mounted repo: on
+macOS and Windows, bind mounts pass through a file-sharing layer with very different fsync and
+read behaviour. `--cap-add=SYS_PTRACE` is only needed for `scripts/syscalls_per_op.sh`.
+
+Other entry points: `scripts/syscalls_per_op.sh` counts I/O syscalls per get/miss/scan for each
+engine, and `scripts/profile.sh` produces an async-profiler flame graph for a single phase
+(`PHASE=read_hit EVENT=wall` is usually the most revealing for I/O-bound work). Results land in
+`bench/kvbench/results/<timestamp>/`.
