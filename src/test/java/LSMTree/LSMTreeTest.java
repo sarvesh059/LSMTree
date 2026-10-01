@@ -626,7 +626,7 @@ public class LSMTreeTest {
     }
 
     @Test
-    void reopeningTreeWithEmptySegmentsThrowsNoError() throws IOException, InterruptedException {
+    void reopeningTreeWithEmptySegmentsThrowsNoError() throws IOException {
         Path dir = dataDir.resolve("empty-segment-recovery");
         try (LSMTree<Integer> firstSession = new LSMTree<>(new IntegerKeyCodec(), dir, SAMPLE_EVERY, THRESHOLD,
                 new FullCompactStrategy<>(1000), new FullLoadMergeStrategy<>(new IntegerKeyCodec()))) {

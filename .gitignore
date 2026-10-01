@@ -32,3 +32,6 @@ bin/
 
 ### Task tracking (personal, not for public repo) ###
 docs/task breakdown.md
+
+### Maven ###
+target/

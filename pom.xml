@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>io.github.sarvesh</groupId>
+    <artifactId>lsmtree</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>LSMTree</name>
+    <description>
+        A log-structured merge-tree key-value store built from scratch in Java: hand-written
+        red-black tree memtable, WAL, SSTables with sparse indexes and bloom filters, and
+        pluggable compaction strategies.
+    </description>
+
+    <properties>
+        <!--
+          22 is the floor, not a preference: the engine uses unnamed variables (_), which were
+          finalised in Java 22. Raising this is a breaking change for contributors; lowering it
+          will not compile. Keep README's stated minimum in sync with this value.
+        -->
+        <maven.compiler.release>22</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+        <junit.version>5.14.0</junit.version>
+        <maven-compiler-plugin.version>3.13.0</maven-compiler-plugin.version>
+        <maven-surefire-plugin.version>3.5.2</maven-surefire-plugin.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!--
+              The BOM keeps junit-jupiter (5.x) and junit-platform (1.x) on matching versions.
+              Declaring them separately is how they drift apart.
+            -->
+            <dependency>
+                <groupId>org.junit</groupId>
+                <artifactId>junit-bom</artifactId>
+                <version>${junit.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!--
+          Surefire 3.x expects the launcher on the test classpath. Without it, JUnit 5 tests can
+          be silently skipped rather than failing loudly - which is exactly the failure mode this
+          project has already been bitten by with the bench sources.
+        -->
+        <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-launcher</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>${maven-compiler-plugin.version}</version>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>${maven-surefire-plugin.version}</version>
+                <configuration>
+                    <!--
+                      The benchmark harnesses live in src/test/java so that (a) they compile on
+                      every build - they have broken silently three times when nothing compiled
+                      them - and (b) they keep package-private access to flush()/segments()/
+                      sharedCompactionLogic(). They are not tests and must never run as part of
+                      `mvn test`. Surefire's default includes would already skip *Benchmark, but
+                      stating it makes the intent explicit rather than incidental to a naming
+                      convention someone could later break.
+                    -->
+                    <excludes>
+                        <exclude>**/*Benchmark.java</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
