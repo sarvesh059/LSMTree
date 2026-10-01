@@ -479,4 +479,18 @@ public class SSTableTest {
 
         assertEquals(List.of(), rangeKeys(dataFile, loaded, 0, 100));
     }
+
+    @Test
+    void minKeyReturnsNullOnEmptyIndex() throws IOException {
+        ssTable.write(new ArrayList<>(), dataFile, indexFile, bloomFilterFile, 5, 0);
+        List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
+        assertNull(ssTable.minKey(dataFile, loaded), "Min Key should return null if the segment is empty");
+    }
+
+    @Test
+    void maxKeyReturnsNullOnEmptyIndex() throws IOException {
+        ssTable.write(new ArrayList<>(), dataFile, indexFile, bloomFilterFile, 5, 0);
+        List<IndexEntry> loaded = ssTable.loadIndex(indexFile);
+        assertNull(ssTable.maxKey(dataFile, loaded), "Max Key should return null if the segment is empty");
+    }
 }

@@ -624,4 +624,29 @@ public class LSMTreeTest {
             );
         }
     }
+
+    @Test
+    void reopeningTreeWithEmptySegmentsThrowsNoError() throws IOException, InterruptedException {
+        Path dir = dataDir.resolve("empty-segment-recovery");
+        try (LSMTree<Integer> firstSession = new LSMTree<>(new IntegerKeyCodec(), dir, SAMPLE_EVERY, THRESHOLD,
+                new FullCompactStrategy<>(1000), new FullLoadMergeStrategy<>(new IntegerKeyCodec()))) {
+            firstSession.put(1, singleByteValue(1));
+            firstSession.flush();
+
+            firstSession.put(1, Value.tombstone(3));
+            firstSession.flush();
+            assertEquals(2, firstSession.segmentCount(), "sanity check: first session left multiple uncompacted segments on disk");
+
+            firstSession.compact();
+            assertEquals(1, firstSession.segmentCount(), "sanity: both merged into one empty segment -- key 1's only value was tombstoned");
+        }
+
+        try (LSMTree<Integer> secondSession = new LSMTree<>(new IntegerKeyCodec(), dir, SAMPLE_EVERY, THRESHOLD,
+                new FullCompactStrategy<>(2), new FullLoadMergeStrategy<>(new IntegerKeyCodec()))) {
+
+            assertEquals(1, secondSession.segmentCount(),
+                    "recovery correctly restores the empty segment without throwing an error");
+            assertNull(secondSession.get(1), "Tombstone key should be dropped during compaction");
+        }
+    }
 }

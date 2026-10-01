@@ -210,10 +210,12 @@ public class SSTable<K extends Comparable<K>> {
     }
 
     public byte[] minKey(File datafile, List<IndexEntry> loadedIndex){
-        return loadedIndex.getFirst().getEncodedKey();
+        return loadedIndex.isEmpty() ? null : loadedIndex.getFirst().getEncodedKey();
     }
 
     public byte[] maxKey(File dataFile, List<IndexEntry> loadedIndex) throws IOException{
+        if(loadedIndex.isEmpty()) return null;
+
         IndexEntry lastIndexEntry = loadedIndex.getLast();
         try (RandomAccessFile readStream = new RandomAccessFile(dataFile, "r")){
             readStream.seek(lastIndexEntry.getOffset());
