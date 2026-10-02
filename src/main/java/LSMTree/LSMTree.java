@@ -27,6 +27,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Predicate;
 
 
 public class LSMTree<K extends Comparable<K>> implements Closeable {
@@ -129,17 +130,16 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         Value value = currentVersion.memTable().get(key);
         if (value != null) return value;
 
-        List<Segment<K>> segmentsSnapshot = new ArrayList<>(currentVersion.segments());
-        segmentsSnapshot.sort((a, b) -> {
-            if (a.getLevel() == b.getLevel()) {
-                return this.codec.compareEncoded(a.getMinKey(), b.getMinKey());
-            } else {
-                return Integer.compare(a.getLevel(), b.getLevel());
-            }
-        });
         byte[] encodedKey = this.codec.encodeKey(key);
 
-        return withPinnedSegments(segmentsSnapshot, pinnedSegments -> {
+        return withPinnedSegments(pinnedSegments -> {
+            pinnedSegments.sort((a, b) -> {
+                if (a.getLevel() == b.getLevel()) {
+                    return this.codec.compareEncoded(a.getMinKey(), b.getMinKey());
+                } else {
+                    return Integer.compare(a.getLevel(), b.getLevel());
+                }
+            });
             Value resultValue = null;
             long maxEventId = -1L;
             for (Segment<K> segment : pinnedSegments) {
@@ -171,24 +171,26 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
 
     EntrySource<K> scan(K low, K high) throws IOException {
         List<EntrySource<K>> cursors = new ArrayList<>();
-        Version<K> currentVersion = this.version.get();
-        List<Segment<K>> pinnedSegments = new ArrayList<>();
+        byte[] encodedLow = this.codec.encodeKey(low);
+        byte[] encodedHigh = this.codec.encodeKey(high);
+        Predicate<Segment<K>> shouldPinSegment = new Predicate<Segment<K>>() {
+            @Override
+            public boolean test(Segment<K> segment) {
+                return codec.compareEncoded(encodedLow, segment.getMaxKey()) <= 0 && codec.compareEncoded(encodedHigh, segment.getMinKey()) >= 0;
+            }
+        };
+        Pair<MemTable<K>, List<Segment<K>>> currentVersionData = currentVersionPinnedData(shouldPinSegment);
+        List<Segment<K>> pinnedSegments = currentVersionData.getSecond();
+        MemTable<K> memTable = currentVersionData.getFirst();
+        List<Entry<K, Value>> memTableEntries = memTable.range(low, high);
+        cursors.add(this.ssTable.memTableCursor(memTableEntries));
         Object token = trackOpenScanPin();
 
         try {
-            byte[] encodedLow = this.codec.encodeKey(low);
-            byte[] encodedHigh = this.codec.encodeKey(high);
-            for (Segment<K> segment : currentVersion.segments()) {
-                if (segment.isDeleted()) continue;
-                if (this.codec.compareEncoded(encodedLow, segment.getMaxKey()) > 0 || this.codec.compareEncoded(encodedHigh, segment.getMinKey()) < 0)
-                    continue;
-                if (!segment.pin()) continue;
-                pinnedSegments.add(segment);
+            for (Segment<K> segment : pinnedSegments) {
                 cursors.add(this.ssTable.rangeCursor(segment.getDataFile(), segment.getLoadedIndex(), encodedLow, encodedHigh));
             }
 
-            List<Entry<K, Value>> memTableEntries = currentVersion.memTable().range(low, high);
-            cursors.add(this.ssTable.memTableCursor(memTableEntries));
 
             return new MergeCursor<>(cursors, this.tombStoneRetentionPolicy, () -> {
                 pinnedSegments.forEach(Segment::unpin);
@@ -239,13 +241,10 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         return this.version.get().segments();
     }
 
-    private <T> T withPinnedSegments(List<Segment<K>> candidates, PinnedSegmentsAction<K, T> body) throws IOException {
-        List<Segment<K>> pinnedSegments = new ArrayList<>();
-        for (Segment<K> segment : candidates) {
-            if (segment.isDeleted()) continue;
-            if (!segment.pin()) continue;
-            pinnedSegments.add(segment);
-        }
+    private <T> T withPinnedSegments(PinnedSegmentsAction<K, T> body) throws IOException {
+        Pair<MemTable<K>, List<Segment<K>>> currentVersionData = currentVersionPinnedData((segment) -> true);
+        List<Segment<K>> pinnedSegments = currentVersionData.getSecond();
+
         try {
             return body.apply(pinnedSegments);
         } finally {
@@ -255,6 +254,37 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
 
     private interface PinnedSegmentsAction<K, T> {
         T apply(List<Segment<K>> pinnedSegments) throws IOException;
+    }
+
+    Pair<MemTable<K>,List<Segment<K>>> currentVersionPinnedData(Predicate<Segment<K>> shouldPinSegment){
+        List<Segment<K>> pinnedSegments = new ArrayList<>();
+        MemTable<K> memTable;
+
+        while (true) {
+            Version<K> currentVersion = this.version.get();
+            List<Segment<K>> segmentsSnapshot = new ArrayList<>(currentVersion.segments());
+
+            pinnedSegments.clear();
+
+            boolean pinningFailed = false;
+
+            for (Segment<K> segment : segmentsSnapshot) {
+                if(!shouldPinSegment.test(segment)) continue;
+                if (!segment.pin()) {
+                    pinningFailed = true;
+                    break;
+                }
+                pinnedSegments.add(segment);
+            }
+
+            if (!pinningFailed) {
+                memTable = currentVersion.memTable();
+                break;
+            }
+            pinnedSegments.forEach(Segment::unpin);
+        }
+
+        return new Pair<>(memTable,pinnedSegments);
     }
 
     Object trackOpenScanPin() {

@@ -10,14 +10,18 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 public class CleanUpService<K extends Comparable<K>> {
     private final Path dataDir;
     private final AtomicReference<Version<K>> version;
     private final Object manifestLock;
     private final Supplier<Long> stalePinAgeSupplier;
+    private final Set<Segment<K>> pendingDeletionSet;
 
     public CleanUpService(Path dataDir, AtomicReference<Version<K>> version, Object manifestLock,
                            Supplier<Long> stalePinAgeSupplier) {
@@ -25,36 +29,31 @@ public class CleanUpService<K extends Comparable<K>> {
         this.version = version;
         this.manifestLock = manifestLock;
         this.stalePinAgeSupplier = stalePinAgeSupplier;
+        this.pendingDeletionSet = ConcurrentHashMap.newKeySet();
     }
 
-    public void cleanUp() throws IOException {
-        List<Segment<K>> purgedSegments = new ArrayList<>();
+    public void cleanUp(List<Segment<K>> segments) throws IOException {
+        pendingDeletionSet.addAll(segments);
 
-        for (Segment<K> segment : this.version.get().segments()) {
-            if (!segment.isDeleted()) continue;
+        for (Segment<K> segment : pendingDeletionSet) {
             if (segment.tryClaimForDeletion()) {
                 try {
                     segment.deleteFiles();
+                    pendingDeletionSet.remove(segment);
                 } catch (IOException e) {
                     System.err.println("WARNING: failed to physically delete segment file "
-                            + segment.getDataFile().getName() + ": " + e.getMessage()
-                            + " -- it will no longer be tracked, but a stray file may remain on disk");
+                            + segment.getDataFile().getName() + ": " + e.getMessage());
                 }
-                purgedSegments.add(segment);
             }
         }
 
-        if (!purgedSegments.isEmpty()) {
-            this.version.updateAndGet(v -> {
-                List<Segment<K>> newList = new ArrayList<>(v.segments());
-                newList.removeAll(purgedSegments);
-                return new Version<>(v.memTable(), newList);
-            });
-        }
 
         synchronized (this.manifestLock) {
             List<String> manifestEntries = new ArrayList<>();
-            for (Segment<K> segment : this.version.get().segments()) {
+            for (Segment<K> segment : Stream.concat(
+                    this.version.get().segments().stream(),
+                    pendingDeletionSet.stream()
+            ).toList()) {
                 manifestEntries.add(segment.isDeleted()
                         ? FileConstants.DELETED_FILE_PREFIX + segment.getDataFile().getName()
                         : segment.getDataFile().getName());

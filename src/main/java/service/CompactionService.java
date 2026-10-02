@@ -14,7 +14,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -112,8 +116,11 @@ public class CompactionService<K extends Comparable<K>> {
         }
 
         selectedSegments.forEach(Segment::unpin);
+        Set<Segment<K>> selectedSgmentsSet = Collections.newSetFromMap(new IdentityHashMap<>());
+        selectedSgmentsSet.addAll(selectedSegments);
         this.version.updateAndGet((currentVersion) -> {
             List<Segment<K>> newSegmentList = new ArrayList<>(currentVersion.segments());
+            newSegmentList.removeAll(selectedSgmentsSet);
             newSegmentList.addAll(newSegments);
             return new Version<>(currentVersion.memTable(), newSegmentList);
         });
@@ -128,7 +135,7 @@ public class CompactionService<K extends Comparable<K>> {
             }
         }
 
-        cleanUpService.cleanUp();
+        cleanUpService.cleanUp(selectedSegments);
     }
 
     private void runCompactionAsync(List<Segment<K>> selectedSegments, List<Segment<K>> segmentsSnapshot) {
