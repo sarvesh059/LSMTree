@@ -41,6 +41,11 @@ public class LSMTreeConcurrencyTest {
         AtomicReference<Throwable> failure = new AtomicReference<>();
         AtomicBoolean stop = new AtomicBoolean(false);
 
+        int sentinel = keyBase(0)-1;
+        String sentinelValue = "sentinel_key";
+        tree.put(sentinel, Value.of(sentinelValue.getBytes(StandardCharsets.UTF_8)));
+        tree.flush();
+
         List<Thread> threads = new java.util.ArrayList<>();
 
         for (int p = 0; p < PUTTER_THREADS; p++) {
@@ -73,6 +78,9 @@ public class LSMTreeConcurrencyTest {
                     while (!stop.get()) {
                         int key = (int) (Math.random() * totalKeySpaceHigh);
                         tree.get(key);
+                        Value value = tree.get(sentinel);
+                        assertNotNull(value);
+                        assertEquals(sentinelValue, new String(value.getData(), StandardCharsets.UTF_8));
                     }
                 } catch (Throwable e) {
                     failure.compareAndSet(null, e);
