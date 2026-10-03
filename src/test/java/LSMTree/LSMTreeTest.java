@@ -254,7 +254,7 @@ public class LSMTreeTest {
             tree.put(1, updated);
             tree.flush(); // segment 2: key 1 = updated value
 
-            tree.compact();
+            tree.sharedCompactionLogic(tree.segments());
 
             assertAll(
                     () -> assertEquals(1, tree.segmentCount(), "compaction should merge both segments into one"),
@@ -276,7 +276,7 @@ public class LSMTreeTest {
             assertNotNull(beforeCompact, "before compaction: the tombstone must still be visible, not null");
             assertTrue(beforeCompact.isTombstone(), "before compaction: should read as a tombstone shadowing the older value");
 
-            tree.compact();
+            tree.sharedCompactionLogic(tree.segments());
 
             assertAll(
                     () -> assertEquals(1, tree.segmentCount(), "compaction should merge both segments into one"),
@@ -302,7 +302,7 @@ public class LSMTreeTest {
             Value key3Before = tree.get(3);
             Value key999Before = tree.get(999);
 
-            tree.compact();
+            tree.sharedCompactionLogic(tree.segments());
 
             assertAll(
                     () -> assertEquals(1, tree.segmentCount(), "sanity check: compaction merged both segments into one"),
@@ -332,7 +332,7 @@ public class LSMTreeTest {
             long preCompactTotalBytes = Arrays.stream(beforeCompact).mapToLong(File::length).sum();
             Set<String> preCompactNames = Arrays.stream(beforeCompact).map(File::getName).collect(Collectors.toSet());
 
-            tree.compact();
+            tree.sharedCompactionLogic(tree.segments());
 
             File[] afterCompact = dataFiles(dir);
             assertEquals(1, afterCompact.length, "old segment files should be physically deleted once compaction completes and nothing still references them");
@@ -462,7 +462,7 @@ public class LSMTreeTest {
 
             List<Entry<Integer, Value>> before = scanEntries(tree, 1, 3);
 
-            tree.compact();
+            tree.sharedCompactionLogic(tree.segments());
 
             List<Entry<Integer, Value>> after = scanEntries(tree, 1, 3);
 
@@ -529,8 +529,8 @@ public class LSMTreeTest {
         fullLoadMergeTree.put(0, Value.tombstone());
         fullLoadMergeTree.flush();
 
-        streamMergeTree.compact();
-        fullLoadMergeTree.compact();
+        streamMergeTree.sharedCompactionLogic(streamMergeTree.segments());
+        fullLoadMergeTree.sharedCompactionLogic(fullLoadMergeTree.segments());
 
         assertAll(
                 () -> assertEquals(1, streamMergeTree.segmentCount(), "sanity check: streaming compaction merged all 4 segments into one"),
@@ -637,7 +637,7 @@ public class LSMTreeTest {
             firstSession.flush();
             assertEquals(2, firstSession.segmentCount(), "sanity check: first session left multiple uncompacted segments on disk");
 
-            firstSession.compact();
+            firstSession.sharedCompactionLogic(firstSession.segments());
             assertEquals(1, firstSession.segmentCount(), "sanity: both merged into one empty segment -- key 1's only value was tombstoned");
         }
 

@@ -114,7 +114,6 @@ public class LSMTreeConcurrencyTest {
                 try {
                     while (!stop.get()) {
                         tree.flush();
-                        tree.compact();
                     }
                 } catch (Throwable e) {
                     failure.compareAndSet(null, e);

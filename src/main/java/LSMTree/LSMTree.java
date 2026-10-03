@@ -161,10 +161,6 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         });
     }
 
-    synchronized void compact() throws IOException {
-        this.compactionService.compact();
-    }
-
     void sharedCompactionLogic(List<Segment<K>> selectedSegments) throws IOException {
         this.compactionService.sharedCompactionLogic(selectedSegments);
     }

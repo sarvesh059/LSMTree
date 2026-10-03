@@ -24,6 +24,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
@@ -36,7 +37,7 @@ public class CompactionService<K extends Comparable<K>> {
     private final Object manifestLock;
     private final CleanUpService<K> cleanUpService;
     private final ExecutorService compactionExecutor = Executors.newSingleThreadExecutor();
-    private volatile boolean compactionInProgress = false;
+    private final AtomicBoolean compactionInProgress = new AtomicBoolean(false);
 
     public CompactionService(Path dataDir, int indexSampleRate, CompactionStrategy<K> compactionStrategy,
                               MergeStrategy<K> mergeStrategy, AtomicReference<Version<K>> version,
@@ -50,17 +51,10 @@ public class CompactionService<K extends Comparable<K>> {
         this.cleanUpService = cleanUpService;
     }
 
-    public synchronized void compact() throws IOException {
-        List<Segment<K>> live = liveSegments(this.version.get());
-        List<Segment<K>> selectedSegments = this.compactionStrategy.select(live);
-        sharedCompactionLogic(selectedSegments, live);
-    }
-
     public void checkAndCompactAsync() {
         List<Segment<K>> live = liveSegments(this.version.get());
-        if (this.compactionStrategy.shouldCompact(live) && !compactionInProgress) {
+        if (this.compactionStrategy.shouldCompact(live) && this.compactionInProgress.compareAndSet(false, true)) {
             List<Segment<K>> selectedSegments = this.compactionStrategy.select(live);
-            this.compactionInProgress = true;
             compactionExecutor.submit(() -> runCompactionAsync(selectedSegments, live));
         }
     }
@@ -70,7 +64,7 @@ public class CompactionService<K extends Comparable<K>> {
         sharedCompactionLogic(selectedSegments, live);
     }
 
-    public void sharedCompactionLogic(List<Segment<K>> selectedSegments, List<Segment<K>> segmentsSnapshot) throws IOException {
+    void sharedCompactionLogic(List<Segment<K>> selectedSegments, List<Segment<K>> segmentsSnapshot) throws IOException {
         File manifestFile = manifestFile();
         Supplier<SegmentFiles> fileFactory = () -> {
             String uuid = UUID.randomUUID().toString();
@@ -93,7 +87,15 @@ public class CompactionService<K extends Comparable<K>> {
             );
         };
 
-        selectedSegments.forEach(Segment::pin);
+        List<Segment<K>> pinnedSegments = new ArrayList<>();
+        for(Segment<K> segment: selectedSegments){
+            if(segment.pin()){
+                pinnedSegments.add(segment);
+            }else{
+                pinnedSegments.forEach(Segment::unpin);
+                return;
+            }
+        }
 
         List<Segment<K>> wipSegments = this.mergeStrategy.merge(selectedSegments, segmentsSnapshot, fileFactory, this.indexSampleRate);
         List<Segment<K>> newSegments = new ArrayList<>();
@@ -116,14 +118,12 @@ public class CompactionService<K extends Comparable<K>> {
         }
 
         selectedSegments.forEach(Segment::unpin);
-        Set<Segment<K>> selectedSgmentsSet = Collections.newSetFromMap(new IdentityHashMap<>());
-        selectedSgmentsSet.addAll(selectedSegments);
-        this.version.updateAndGet((currentVersion) -> {
-            List<Segment<K>> newSegmentList = new ArrayList<>(currentVersion.segments());
-            newSegmentList.removeAll(selectedSgmentsSet);
-            newSegmentList.addAll(newSegments);
-            return new Version<>(currentVersion.memTable(), newSegmentList);
-        });
+        if(!tryReplaceSegments(selectedSegments, newSegments)){
+            newSegments.forEach(Segment::markDeleted);
+            cleanUpService.cleanUp(newSegments);
+            return;
+        }
+
         selectedSegments.forEach(Segment::markDeleted);
 
         synchronized (this.manifestLock) {
@@ -144,15 +144,8 @@ public class CompactionService<K extends Comparable<K>> {
         } catch (Throwable _) {
 
         } finally {
-            synchronized (this) {
-                this.compactionInProgress = false;
-                List<Segment<K>> live = liveSegments(this.version.get());
-                if (this.compactionStrategy.shouldCompact(live)) {
-                    List<Segment<K>> nextSelectedSegments = this.compactionStrategy.select(live);
-                    this.compactionInProgress = true;
-                    compactionExecutor.submit(() -> runCompactionAsync(nextSelectedSegments, live));
-                }
-            }
+            compactionInProgress.set(false);
+            checkAndCompactAsync();
         }
     }
 
@@ -167,7 +160,7 @@ public class CompactionService<K extends Comparable<K>> {
             } catch (ExecutionException e) {
                 throw new RuntimeException(e);
             }
-            if (!this.compactionInProgress) return;
+            if (!this.compactionInProgress.get()) return;
         }
     }
 
@@ -183,4 +176,24 @@ public class CompactionService<K extends Comparable<K>> {
     private File manifestFile() {
         return this.dataDir.resolve(FileConstants.MANIFEST_FILE_NAME).toFile();
     }
+
+    private boolean tryReplaceSegments(List<Segment<K>> supersededSegments, List<Segment<K>> newSegments){
+        Set<Segment<K>> selectedSegmentsSet = Collections.newSetFromMap(new IdentityHashMap<>());
+        selectedSegmentsSet.addAll(supersededSegments);
+        AtomicBoolean segmentListUnchanged = new AtomicBoolean(true);
+        this.version.updateAndGet((currentVersion) -> {
+            List<Segment<K>> newSegmentList = new ArrayList<>(currentVersion.segments());
+            int initialSize = newSegmentList.size();
+            newSegmentList.removeAll(selectedSegmentsSet);
+            if(initialSize - selectedSegmentsSet.size() != newSegmentList.size()){
+                segmentListUnchanged.set(false);
+                return currentVersion;
+            }
+            newSegmentList.addAll(newSegments);
+            return new Version<>(currentVersion.memTable(), newSegmentList);
+        });
+
+        return segmentListUnchanged.get();
+    }
+
 }
