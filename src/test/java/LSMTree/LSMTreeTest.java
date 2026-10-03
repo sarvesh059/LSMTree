@@ -2,12 +2,17 @@ package LSMTree;
 
 import RBT.Entry;
 import compaction.CompactStrategyImpl.FullCompactStrategy;
+import compaction.CompactStrategyImpl.LeveledCompactionStrategy;
 import compaction.CompactStrategyImpl.SizeTieredCompactStrategy;
 import compaction.MergeStrategyImpl.FullLoadMergeStrategy;
 import compaction.MergeStrategyImpl.StreamingMergeStrategy;
+import constants.FileConstants;
+import core.Segment;
 import core.Value;
+import core.key.KeyCodec;
 import core.key.KeyCodecImpl.IntegerKeyCodec;
 import cursor.EntrySource;
+import manifest.Manifest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,6 +27,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -647,6 +654,169 @@ public class LSMTreeTest {
             assertEquals(1, secondSession.segmentCount(),
                     "recovery correctly restores the empty segment without throwing an error");
             assertNull(secondSession.get(1), "Tombstone key should be dropped during compaction");
+        }
+    }
+
+    @Test
+    void staleCompactionResultIsNotPublishedAndCannotResurrectADeletedKey() throws IOException {
+        Path dir = dataDir.resolve("test-compaction-overlap");
+        KeyCodec<Integer> codec = new IntegerKeyCodec();
+        try(LSMTree<Integer> tree = new LSMTree<>(codec, dir,SAMPLE_EVERY, THRESHOLD,
+                new LeveledCompactionStrategy<>(), new StreamingMergeStrategy<>(codec))){
+            tree.put(7, Value.of(1, new byte[0]));
+            tree.flush();
+
+            assertEquals(1, tree.segmentCount(),"Tree should have only 1 segment at this point");
+
+            List<Segment<Integer>> segmentSnapshot = new ArrayList<>(tree.segments());
+
+            tree.put(7, Value.tombstone(2));
+            tree.flush();
+
+            assertEquals(2, tree.segmentCount(), "Tree should have 2 segments at this point");
+
+            try(EntrySource<Integer> cursor = tree.scan(7,7)){
+                tree.sharedCompactionLogic(tree.segments());
+                assertEquals(1, tree.segmentCount(),"Tree should have only 1 segment after compaction");
+                assertNull(tree.get(7),
+                        "precondition: the winner must drop the tombstone, not retain it");
+                assertEquals(3, dataFiles(dir).length,
+                        "two superseded files pinned by the cursor, plus the winner's output");
+            }
+
+            assertTrue(segmentSnapshot.getFirst().getDataFile().exists(),
+                    "precondition: the held cursor must have blocked cleanUp");
+            tree.sharedCompactionLogic(segmentSnapshot);
+            assertEquals(1, tree.segmentCount(),"Tree should have same segments as before");
+            assertNull(tree.get(7),
+                    "the stale output must not be published; it still holds key 7's old value");
+            assertEquals(1, dataFiles(dir).length, "Tree should have only 1 data file");
+        }
+    }
+
+    @Test
+    void abandonedCompactionLeavesTheVersionUntouchedAndDeletesItsOwnOutput() throws IOException {
+        Path dir = dataDir.resolve("abandoned-install");
+        KeyCodec<Integer> codec = new IntegerKeyCodec();
+        try (LSMTree<Integer> tree = new LSMTree<>(codec, dir, SAMPLE_EVERY, THRESHOLD,
+                new FullCompactStrategy<>(1000), new FullLoadMergeStrategy<>(codec))) {
+
+            tree.put(1, singleByteValue(1));
+            tree.flush();
+            List<Segment<Integer>> staleSelection = new ArrayList<>(tree.segments());
+            assertEquals(1, staleSelection.size(), "sanity: the stale selection is exactly one segment");
+
+            tree.put(2, singleByteValue(2));
+            tree.flush();
+            assertEquals(2, tree.segmentCount(), "sanity: two uncompacted segments");
+
+            try (EntrySource<Integer> heldCursor = tree.scan(1, 2)) {
+                tree.sharedCompactionLogic(tree.segments());
+                assertEquals(1, tree.segmentCount(), "the winner's install must succeed");
+                assertEquals(3, dataFiles(dir).length,
+                        "two superseded files pinned by the cursor, plus the winner's output");
+            }
+
+            assertTrue(staleSelection.getFirst().getDataFile().exists(),
+                    "precondition: the held cursor must have blocked cleanUp");
+
+            Segment<Integer> survivingSegment = tree.segments().getFirst();
+
+            tree.sharedCompactionLogic(staleSelection);
+
+            assertEquals(List.of(survivingSegment), tree.segments(),
+                    "a failed install must leave the segment list untouched, nothing appended");
+            assertEquals(1, dataFiles(dir).length, "the abandoned output must be deleted, not orphaned");
+            assertEquals(singleByteValue(1), tree.get(1), "key 1 must still read correctly");
+            assertEquals(singleByteValue(2), tree.get(2), "key 2 must still read correctly");
+        }
+    }
+
+    @Test
+    void concurrentCompactionsWithDisjointInputsBothInstall() throws Exception {
+        Path dir = dataDir.resolve("disjoint-installs");
+        KeyCodec<Integer> codec = new IntegerKeyCodec();
+        try (LSMTree<Integer> tree = new LSMTree<>(codec, dir, SAMPLE_EVERY, THRESHOLD,
+                new FullCompactStrategy<>(1000), new FullLoadMergeStrategy<>(codec))) {
+
+            for (int key = 1; key <= 4; key++) {
+                tree.put(key, singleByteValue(key));
+                tree.flush();
+            }
+            assertEquals(4, tree.segmentCount(), "sanity: four single-key segments");
+
+            List<Segment<Integer>> all = new ArrayList<>(tree.segments());
+            List<Segment<Integer>> selectionA = List.of(all.get(0), all.get(1));
+            List<Segment<Integer>> selectionB = List.of(all.get(2), all.get(3));
+
+            AtomicReference<Throwable> failure = new AtomicReference<>();
+            CyclicBarrier startTogether = new CyclicBarrier(2);
+
+            Thread compactA = new Thread(() -> {
+                try {
+                    startTogether.await();
+                    tree.sharedCompactionLogic(selectionA);
+                } catch (Throwable t) {
+                    failure.compareAndSet(null, t);
+                }
+            });
+            Thread compactB = new Thread(() -> {
+                try {
+                    startTogether.await();
+                    tree.sharedCompactionLogic(selectionB);
+                } catch (Throwable t) {
+                    failure.compareAndSet(null, t);
+                }
+            });
+
+            compactA.start();
+            compactB.start();
+            compactA.join();
+            compactB.join();
+
+            assertNull(failure.get(), () -> "a concurrent compaction threw: " + failure.get());
+            assertEquals(2, tree.segmentCount(),
+                    "disjoint inputs must both install; 3 means one was wrongly abandoned");
+            for (int key = 1; key <= 4; key++) {
+                assertEquals(singleByteValue(key), tree.get(key), "key " + key + " must survive both");
+            }
+        }
+    }
+
+    @Test
+    void treeReopensWithNoOrphanManifestEntryAfterAnAbandonedCompaction() throws IOException {
+        Path dir = dataDir.resolve("reopen-after-abandon");
+        KeyCodec<Integer> codec = new IntegerKeyCodec();
+
+        try (LSMTree<Integer> firstSession = new LSMTree<>(codec, dir, SAMPLE_EVERY, THRESHOLD,
+                new FullCompactStrategy<>(1000), new FullLoadMergeStrategy<>(codec))) {
+
+            firstSession.put(1, singleByteValue(1));
+            firstSession.flush();
+            List<Segment<Integer>> staleSelection = new ArrayList<>(firstSession.segments());
+
+            firstSession.put(2, singleByteValue(2));
+            firstSession.flush();
+
+            try (EntrySource<Integer> heldCursor = firstSession.scan(1, 2)) {
+                firstSession.sharedCompactionLogic(firstSession.segments());
+            }
+
+            assertTrue(staleSelection.getFirst().getDataFile().exists(),
+                    "precondition: the held cursor must have blocked cleanUp");
+            firstSession.sharedCompactionLogic(staleSelection);
+            assertEquals(1, firstSession.segmentCount(), "sanity: the stale install was rejected");
+        }
+
+        List<String> manifestEntries = Manifest.readAll(dir.resolve(FileConstants.MANIFEST_FILE_NAME).toFile());
+        assertTrue(manifestEntries.stream().noneMatch(entry -> entry.startsWith(FileConstants.WIP_FILE_PREFIX)),
+                () -> "the abandoned compaction's WIP- entry must be gone: " + manifestEntries);
+
+        try (LSMTree<Integer> secondSession = new LSMTree<>(codec, dir, SAMPLE_EVERY, THRESHOLD,
+                new FullCompactStrategy<>(1000), new FullLoadMergeStrategy<>(codec))) {
+            assertEquals(1, secondSession.segmentCount(), "reopen must recover only the winner's output");
+            assertEquals(singleByteValue(1), secondSession.get(1), "key 1 must survive the reopen");
+            assertEquals(singleByteValue(2), secondSession.get(2), "key 2 must survive the reopen");
         }
     }
 }
