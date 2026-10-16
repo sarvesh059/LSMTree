@@ -28,15 +28,12 @@ public class WALTest {
 
     @Test
     void replayIntoFreshMemTableReproducesExactState() throws IOException {
-        try (WAL<Integer> wal = new WAL<>(new IntegerKeyCodec(), walFile)) {
-            wal.append(1, Value.of("hello".getBytes(StandardCharsets.UTF_8)));
-            wal.append(2, Value.of("world".getBytes(StandardCharsets.UTF_8)));
-            wal.append(3, Value.tombstone());
-        }
+        fillWALRecords();
 
         MemTable<Integer> memTable = new MemTable<>(1000);
         try (WAL<Integer> wal = new WAL<>(new IntegerKeyCodec(), walFile)) {
-            wal.replay(memTable);
+            ReplayResult result = wal.replay(memTable);
+            assertEquals(WALReplayStopReason.CLEAN_EOF ,result.stopReason(), "Replay with no error should have a clean EOF as replay stop reason.");
         }
 
         assertAll(
@@ -64,23 +61,18 @@ public class WALTest {
 
     @Test
     void truncatedTrailingRecordIsSkippedWithoutError() throws IOException {
-        try (WAL<Integer> wal = new WAL<>(new IntegerKeyCodec(), walFile)) {
-            wal.append(1, Value.of("hello".getBytes(StandardCharsets.UTF_8)));
-            wal.append(2, Value.of("world".getBytes(StandardCharsets.UTF_8)));
-            wal.append(3, Value.tombstone());
-        }
+        fillWALRecords();
 
-        // simulate mid crash: records 1 and 2 are each 4 (key) + 8 (id) + 1 (flag) + 4 (length) + 5
-        // (payload) = 22 bytes, ending at offset 44; truncating at 50 lands partway into record 3's
-        // id field, leaving records 1 and 2 fully intact and record 3 a partial, unreadable trailer.
         try (RandomAccessFile raf = new RandomAccessFile(walFile, "rw")) {
-            raf.setLength(50);
+            raf.setLength(100);
         }
 
         MemTable<Integer> memTable = new MemTable<>(1000);
         try (WAL<Integer> wal = new WAL<>(new IntegerKeyCodec(), walFile)) {
-            assertDoesNotThrow(() -> wal.replay(memTable),
-                    "a truncated trailing record must be skipped, not thrown");
+            ReplayResult result = assertDoesNotThrow(() -> wal.replay(memTable));
+            assertEquals(WALReplayStopReason.TRUNCATED, result.stopReason());
+            assertEquals(2, result.recordsRecovered());
+            assertEquals(84, result.offset());
         }
 
         assertAll(
@@ -161,6 +153,151 @@ public class WALTest {
                     () -> assertEquals(v2, recovered.get(2), "v2 should be present in recovered memTable"),
                     () -> assertNull(recovered.get(3), "v3 should not be present in recovered memTable")
             );
+        }
+    }
+
+    @Test
+    void replayTruncatedWhenLengthExceedsFileRemainder() throws IOException {
+        fillWALRecords();
+
+        try (RandomAccessFile raf = new RandomAccessFile(walFile, "rw")) {
+            raf.seek(100);
+            raf.writeInt(1 << 28);
+        }
+
+        MemTable<Integer> memTable = new MemTable<>(1000);
+        try (WAL<Integer> wal = new WAL<>(new IntegerKeyCodec(), walFile)) {
+            ReplayResult result = assertDoesNotThrow(() -> wal.replay(memTable));
+            assertEquals(WALReplayStopReason.TRUNCATED, result.stopReason());
+            assertEquals(2, result.recordsRecovered());
+            assertEquals(84, result.offset());
+        }
+
+        assertAll(
+                () -> assertEquals(Value.of("hello".getBytes(StandardCharsets.UTF_8)), memTable.get(1),
+                        "record before the truncation point should survive"),
+                () -> assertEquals(Value.of("world".getBytes(StandardCharsets.UTF_8)), memTable.get(2),
+                        "record before the truncation point should survive"),
+                () -> assertNull(memTable.get(3), "the truncated trailing record must not appear at all")
+        );
+    }
+
+    @Test
+    void replayReturnInvalidLengthWhenPayloadHasNoLength() throws IOException {
+        fillWALRecords();
+
+        try (RandomAccessFile raf = new RandomAccessFile(walFile, "rw")) {
+            raf.seek(100);
+            raf.writeInt(0);
+        }
+
+        MemTable<Integer> memTable = new MemTable<>(1000);
+        try (WAL<Integer> wal = new WAL<>(new IntegerKeyCodec(), walFile)) {
+            ReplayResult result = assertDoesNotThrow(() -> wal.replay(memTable));
+            assertEquals(WALReplayStopReason.INVALID_LENGTH, result.stopReason());
+            assertEquals(2, result.recordsRecovered());
+            assertEquals(84, result.offset());
+        }
+
+        assertAll(
+                () -> assertEquals(Value.of("hello".getBytes(StandardCharsets.UTF_8)), memTable.get(1),
+                        "record before the truncation point should survive"),
+                () -> assertEquals(Value.of("world".getBytes(StandardCharsets.UTF_8)), memTable.get(2),
+                        "record before the truncation point should survive"),
+                () -> assertNull(memTable.get(3), "the truncated trailing record must not appear at all")
+        );
+    }
+
+    @Test
+    void replayCorrectlyReturnsBadMagic() throws IOException {
+        fillWALRecords();
+
+        try (RandomAccessFile raf = new RandomAccessFile(walFile, "rw")) {
+            raf.seek(84);
+            raf.write(new byte[33]);
+        }
+
+        MemTable<Integer> memTable = new MemTable<>(1000);
+        try (WAL<Integer> wal = new WAL<>(new IntegerKeyCodec(), walFile)) {
+            ReplayResult result = assertDoesNotThrow(() -> wal.replay(memTable));
+            assertEquals(WALReplayStopReason.BAD_MAGIC, result.stopReason());
+            assertEquals(2, result.recordsRecovered());
+            assertEquals(84, result.offset());
+        }
+
+        assertAll(
+                () -> assertEquals(Value.of("hello".getBytes(StandardCharsets.UTF_8)), memTable.get(1),
+                        "record before the truncation point should survive"),
+                () -> assertEquals(Value.of("world".getBytes(StandardCharsets.UTF_8)), memTable.get(2),
+                        "record before the truncation point should survive"),
+                () -> assertNull(memTable.get(3), "the truncated trailing record must not appear at all"),
+                () -> assertNull(memTable.get(Integer.MIN_VALUE), "Integer.MIN_VALUE record must not appear at all")
+        );
+    }
+
+    @Test
+    void replayCorrectlyReturnsCheckSumMisMatch() throws IOException {
+        fillWALRecords();
+
+        try (RandomAccessFile raf = new RandomAccessFile(walFile, "rw")) {
+            raf.seek(40);
+            raf.write(0);
+        }
+
+        MemTable<Integer> memTable = new MemTable<>(1000);
+        try (WAL<Integer> wal = new WAL<>(new IntegerKeyCodec(), walFile)) {
+            ReplayResult result = assertDoesNotThrow(() -> wal.replay(memTable));
+            assertEquals(WALReplayStopReason.CHECKSUM_MISMATCH, result.stopReason());
+            assertEquals(0, result.recordsRecovered());
+            assertEquals(0, result.offset());
+        }
+
+        assertAll(
+                () -> assertTrue(memTable.entries().isEmpty(), "memTable should be empty"),
+                () -> assertNull(memTable.get(1),
+                        "Corrupted record is not loaded to memTable"),
+                () -> assertNull(memTable.get(3), "the truncated trailing record must not appear at all"),
+                () -> assertNull(memTable.get(Integer.MIN_VALUE), "Integer.MIN_VALUE record must not appear at all")
+        );
+    }
+
+    @Test
+    void replayCorrectlyReturnsStaleRecordWhenTagRegresses() throws IOException {
+        try (WAL<Integer> wal = new WAL<>(new IntegerKeyCodec(), walFile)) {
+            wal.append(1, Value.of(10, new byte[]{1}));
+            wal.append(2, Value.of(20, new byte[]{2}));
+        }
+
+        try (RandomAccessFile raf = new RandomAccessFile(walFile, "rw")) {
+            raf.seek(4);
+            raf.writeLong(30);
+        }
+
+        MemTable<Integer> memTable = new MemTable<>(1000);
+        try (WAL<Integer> wal = new WAL<>(new IntegerKeyCodec(), walFile)) {
+            ReplayResult result = assertDoesNotThrow(() -> wal.replay(memTable));
+            assertEquals(WALReplayStopReason.STALE_RECORD, result.stopReason(),
+                    "a record whose tag regresses belongs to an earlier epoch and must stop replay");
+            assertEquals(1, result.recordsRecovered());
+            assertEquals(38, result.offset(), "the offset must point at the stale record's start");
+        }
+
+        assertAll(
+                () -> assertEquals(Value.of(new byte[]{1}), memTable.get(1),
+                        "the record before the regression is valid and must be recovered"),
+                () -> assertNull(memTable.get(2),
+                        "the stale record must not be replayed -- doing so would overwrite a newer "
+                                + "value with an older one, since MemTable.put does not compare ids")
+        );
+    }
+
+    void fillWALRecords() throws IOException{
+        try (WAL<Integer> wal = new WAL<>(new IntegerKeyCodec(), walFile)) {
+            // Header size: [Magic]->4 bytes, [tag] -> 8 bytes, [checksum] -> 4 bytes, [length] -> 4 bytes = 20 bytes
+            // Payload size: [key] -> 4 bytes, [value] -> 8 bytes (id) + 1 bytes (tombstone flag) + 4 bytes(value length) + 5 bytes (value) = 22 bytes
+            wal.append(1, Value.of("hello".getBytes(StandardCharsets.UTF_8))); // 42 bytes
+            wal.append(2, Value.of("world".getBytes(StandardCharsets.UTF_8))); // 42 bytes
+            wal.append(3, Value.tombstone()); //33 bytes
         }
     }
 }

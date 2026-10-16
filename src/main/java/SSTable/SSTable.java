@@ -236,8 +236,8 @@ public class SSTable<K extends Comparable<K>> {
         try(RandomAccessFile dataFileReader = new RandomAccessFile(dataFile, "rw")){
             int entryCount = dataFileReader.readInt();
             int level = dataFileReader.readInt();
-            long maxEventid = dataFileReader.readLong();
-            return new DataFileMetaData(entryCount, level, maxEventid);
+            long maxEventId = dataFileReader.readLong();
+            return new DataFileMetaData(entryCount, level, maxEventId);
         }
     }
 

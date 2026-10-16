@@ -22,6 +22,7 @@ public class CleanUpService<K extends Comparable<K>> {
     private final Object manifestLock;
     private final Supplier<Long> stalePinAgeSupplier;
     private final Set<Segment<K>> pendingDeletionSet;
+    private static final System.Logger LOG = System.getLogger(CleanUpService.class.getName());
 
     public CleanUpService(Path dataDir, AtomicReference<Version<K>> version, Object manifestLock,
                            Supplier<Long> stalePinAgeSupplier) {
@@ -41,7 +42,7 @@ public class CleanUpService<K extends Comparable<K>> {
                     segment.deleteFiles();
                     pendingDeletionSet.remove(segment);
                 } catch (IOException e) {
-                    System.err.println("WARNING: failed to physically delete segment file "
+                    LOG.log(System.Logger.Level.ERROR,"WARNING: failed to physically delete segment file "
                             + segment.getDataFile().getName() + ": " + e.getMessage());
                 }
             }
@@ -63,7 +64,7 @@ public class CleanUpService<K extends Comparable<K>> {
 
         long oldestPinAge = stalePinAgeSupplier.get();
         if (oldestPinAge > FileConstants.STALE_PIN_WARNING_THRESHOLD_IN_MILLIS) {
-            System.err.println("WARNING: a scan() snapshot has been held open for " + oldestPinAge
+            LOG.log(System.Logger.Level.ERROR,"WARNING: a scan() snapshot has been held open for " + oldestPinAge
                     + "ms, delaying physical segment-file deletion for whatever it's still referencing");
         }
     }
