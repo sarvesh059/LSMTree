@@ -42,7 +42,7 @@ public class CleanUpService<K extends Comparable<K>> {
                     segment.deleteFiles();
                     pendingDeletionSet.remove(segment);
                 } catch (IOException e) {
-                    LOG.log(System.Logger.Level.ERROR,"WARNING: failed to physically delete segment file "
+                    LOG.log(System.Logger.Level.WARNING,"failed to physically delete segment file "
                             + segment.getDataFile().getName() + ": " + e.getMessage());
                 }
             }
@@ -64,7 +64,7 @@ public class CleanUpService<K extends Comparable<K>> {
 
         long oldestPinAge = stalePinAgeSupplier.get();
         if (oldestPinAge > FileConstants.STALE_PIN_WARNING_THRESHOLD_IN_MILLIS) {
-            LOG.log(System.Logger.Level.ERROR,"WARNING: a scan() snapshot has been held open for " + oldestPinAge
+            LOG.log(System.Logger.Level.INFO,"a scan() snapshot has been held open for " + oldestPinAge
                     + "ms, delaying physical segment-file deletion for whatever it's still referencing");
         }
     }

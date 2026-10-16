@@ -3,6 +3,8 @@ package service;
 import LSMTree.Version;
 import SSTable.SSTable;
 import WAL.WAL;
+import WAL.ReplayResult;
+import WAL.WALReplayStopReason;
 import bloomFilter.BloomFilter;
 import constants.FileConstants;
 import core.DataFileMetaData;
@@ -28,6 +30,7 @@ public class RecoveryService<K extends Comparable<K>> {
     private final int memTableThreshold;
     private final AtomicReference<Version<K>> version;
     private final Object manifestLock;
+    private static final System.Logger LOG = System.getLogger(RecoveryService.class.getName());
 
     public RecoveryService(Path dataDir, SSTable<K> ssTable, WAL<K> wal, int memTableThreshold,
                             AtomicReference<Version<K>> version, Object manifestLock) {
@@ -87,7 +90,13 @@ public class RecoveryService<K extends Comparable<K>> {
         }
 
         MemTable<K> newMemTable = new MemTable<>(this.memTableThreshold);
-        this.wal.replay(newMemTable);
+        ReplayResult replayResult = this.wal.replay(newMemTable);
+        if (replayResult.stopReason() != WALReplayStopReason.CLEAN_EOF) {
+            LOG.log(replayResult.stopReason().logLevel(),
+                    () -> "Opened " + this.dataDir + " with a damaged WAL: "
+                            + replayResult.stopReason() + " after " + replayResult.recordsRecovered()
+                            + " records. See the preceding WAL entry for the failing offset.");
+        }
         this.version.updateAndGet((_) -> new Version<K>(newMemTable, segments));
 
         for (String dataFileName : pendingDeletionDataFiles) {
