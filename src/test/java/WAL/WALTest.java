@@ -264,13 +264,10 @@ public class WALTest {
     @Test
     void replayCorrectlyReturnsStaleRecordWhenTagRegresses() throws IOException {
         try (WAL<Integer> wal = new WAL<>(new IntegerKeyCodec(), walFile)) {
-            wal.append(1, Value.of(10, new byte[]{1}));
-            wal.append(2, Value.of(20, new byte[]{2}));
+            wal.append(1, Value.of(30, new byte[]{1}));   // tag 30
         }
-
-        try (RandomAccessFile raf = new RandomAccessFile(walFile, "rw")) {
-            raf.seek(4);
-            raf.writeLong(30);
+        try (WAL<Integer> wal = new WAL<>(new IntegerKeyCodec(), walFile)) {
+            wal.append(2, Value.of(20, new byte[]{2}));   // fresh instance: latestEventId starts at -1, so tag 20
         }
 
         MemTable<Integer> memTable = new MemTable<>(1000);
