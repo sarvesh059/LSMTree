@@ -297,4 +297,24 @@ public class WALTest {
             wal.append(3, Value.tombstone()); //33 bytes
         }
     }
+
+    @Test
+    void replayTruncatesTheFileToTheLastGoodRecordBoundary() throws IOException {
+        fillWALRecords();
+
+        try (RandomAccessFile raf = new RandomAccessFile(walFile, "rw")) {
+            raf.setLength(100);
+        }
+
+        MemTable<Integer> memTable = new MemTable<>(1000);
+        try (WAL<Integer> wal = new WAL<>(new IntegerKeyCodec(), walFile)) {
+            ReplayResult result = wal.replay(memTable);
+            assertEquals(WALReplayStopReason.TRUNCATED, result.stopReason());
+            assertEquals(84, result.offset());
+        }
+
+        assertEquals(84, walFile.length(),
+                "replay must truncate to the last good boundary, so the next append lands there "
+                        + "rather than behind unreadable bytes");
+    }
 }

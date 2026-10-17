@@ -863,4 +863,43 @@ public class LSMTreeTest {
                     "the tree must accept writes after recovering from a truncated WAL");
         }
     }
+
+    /** A tree whose memtable threshold is unreachable, so nothing flushes and the WAL holds everything. */
+    private LSMTree<Integer> newTreeThatNeverFlushes(Path dir) throws IOException {
+        return new LSMTree<>(new IntegerKeyCodec(), dir, SAMPLE_EVERY, 1_000_000,
+                new FullCompactStrategy<>(1000), new FullLoadMergeStrategy<>(new IntegerKeyCodec()));
+    }
+
+    @Test
+    void writesAfterRecoveringACorruptWalSurviveTheNextCrash() throws IOException {
+        Path dir = dataDir.resolve("corrupt-wal-rewrite");
+        File walFile;
+
+        try (LSMTree<Integer> firstSession = newTreeThatNeverFlushes(dir)) {
+            firstSession.put(1, singleByteValue(1));
+            firstSession.put(2, singleByteValue(2));
+            firstSession.put(3, singleByteValue(3));
+            walFile = firstSession.walFile();
+        }
+
+        // Records are 38 bytes each, so record 3 spans [76,114). Truncating to 90 leaves it short of
+        // its 20-byte header.
+        try (RandomAccessFile raf = new RandomAccessFile(walFile, "rw")) {
+            raf.setLength(90);
+        }
+
+        try (LSMTree<Integer> secondSession = newTreeThatNeverFlushes(dir)) {
+            assertEquals(76, walFile.length(),
+                    "recovery must truncate the WAL to the last good boundary before accepting writes");
+            secondSession.put(4, singleByteValue(4));
+        }
+
+        try (LSMTree<Integer> thirdSession = newTreeThatNeverFlushes(dir)) {
+            assertEquals(singleByteValue(4), thirdSession.get(4),
+                    "key 4 was acknowledged after recovery, so it must survive a later crash; if the "
+                            + "corrupt tail had been left in place the next replay would stop short of it");
+            assertEquals(singleByteValue(1), thirdSession.get(1), "the original prefix must still be there");
+            assertNull(thirdSession.get(3), "the record cut mid-write must stay gone");
+        }
+    }
 }

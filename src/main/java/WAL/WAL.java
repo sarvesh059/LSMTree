@@ -124,16 +124,21 @@ public class WAL<K extends Comparable<K>> implements Closeable {
     }
 
     public void reset() throws IOException {
-        this.fileStream.setLength(0);
-        this.fileStream.seek(0);
+        truncateAndSync(0);
+    }
+
+    private void truncateAndSync(long newLength) throws IOException {
+        this.fileStream.setLength(newLength);
         fsync();
     }
 
-    private ReplayResult stopAndLog(WALReplayStopReason reason, long offset, int recordsRecovered){
+    private ReplayResult stopAndLog(WALReplayStopReason reason, long offset, int recordsRecovered)
+            throws IOException {
         LOG.log(reason.logLevel(),
                 () -> "WAL replay stopped at offset " + offset + " of " + walFile
                         + ": " + reason + ". " + recordsRecovered
                         + " records recovered. Everything after this offset is discarded.");
+        truncateAndSync(offset);
         return new ReplayResult(recordsRecovered, reason, offset);
     }
 
