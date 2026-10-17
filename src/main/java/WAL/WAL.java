@@ -16,7 +16,6 @@ public class WAL<K extends Comparable<K>> implements Closeable {
     private final File walFile;
     private final RandomAccessFile fileStream;
     private long latestEventId = -1;
-    private final ByteArrayOutputStream byteArrayOutputStream;
     private static final byte[] magic = "WAL2".getBytes(StandardCharsets.UTF_8);
     private static final System.Logger LOG = System.getLogger(WAL.class.getName());
 
@@ -32,12 +31,15 @@ public class WAL<K extends Comparable<K>> implements Closeable {
         this.walFile = walFile;
         this.fileStream = new RandomAccessFile(walFile, "rw");
         this.fileStream.seek(this.fileStream.length());
-        this.byteArrayOutputStream = new ByteArrayOutputStream();
     }
 
+    /**
+     * Not thread-safe: mutates {@code latestEventId} and the shared file position.
+     * Callers must serialize.
+     */
     public void append(K key, Value value) throws IOException {
-        byteArrayOutputStream.reset();
-        DataOutputStream dataOutputStream = new DataOutputStream(this.byteArrayOutputStream);
+        ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream(HEADER_SIZE + 32);
+        DataOutputStream dataOutputStream = new DataOutputStream(byteArrayOutputStream);
         latestEventId = Math.max(latestEventId, value.getId());
 
         // WAL record format [magic][checksum][tag][len][payload]
@@ -50,7 +52,7 @@ public class WAL<K extends Comparable<K>> implements Closeable {
         byte[] frame = byteArrayOutputStream.toByteArray();
         int payloadLength = frame.length - HEADER_SIZE;
         ByteBuffer.wrap(frame).putInt(LENGTH_OFFSET, payloadLength);
-        ByteBuffer.wrap(frame).putInt(CRC_OFFSET, getCRC32CheckSum(frame, CRC_COVERED_FROM, frame.length - CRC_COVERED_FROM));
+        ByteBuffer.wrap(frame).putInt(CRC_OFFSET, getCRC32CCheckSum(frame, CRC_COVERED_FROM, frame.length - CRC_COVERED_FROM));
         this.fileStream.write(frame);
 
     }
@@ -93,10 +95,10 @@ public class WAL<K extends Comparable<K>> implements Closeable {
                 byte[] payload = new byte[payloadLength];
                 in.readFully(payload);
 
-                byte[] frames = ByteBuffer.allocate(header.length + payload.length).put(header).put(payload).array();
-
-                int computedChecksum = getCRC32CheckSum(frames, CRC_COVERED_FROM, frames.length - CRC_COVERED_FROM );
-                if(readChecksum != computedChecksum){
+                Checksum crc = newChecksum();
+                crc.update(header, CRC_COVERED_FROM, HEADER_SIZE - CRC_COVERED_FROM);
+                crc.update(payload, 0, payload.length);
+                if(readChecksum != (int) crc.getValue()){
                     return stopAndLog(WALReplayStopReason.CHECKSUM_MISMATCH, offset, recordsRecovered);
                 }
                 ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream( payload);
@@ -140,8 +142,12 @@ public class WAL<K extends Comparable<K>> implements Closeable {
         this.fileStream.close();
     }
 
-    private static int getCRC32CheckSum(byte[] data, int offset, int length){
-        Checksum crc32 = new CRC32C();
+    private static Checksum newChecksum(){
+        return new CRC32C();
+    }
+
+    private static int getCRC32CCheckSum(byte[] data, int offset, int length){
+        Checksum crc32 = newChecksum();
         crc32.update(data, offset, length);
         return (int) crc32.getValue();
     }

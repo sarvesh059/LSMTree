@@ -20,6 +20,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -817,6 +818,49 @@ public class LSMTreeTest {
             assertEquals(1, secondSession.segmentCount(), "reopen must recover only the winner's output");
             assertEquals(singleByteValue(1), secondSession.get(1), "key 1 must survive the reopen");
             assertEquals(singleByteValue(2), secondSession.get(2), "key 2 must survive the reopen");
+        }
+    }
+
+    @Test
+    void reopenRecoversTheValidPrefixOfACorruptWalAndStaysUsable() throws IOException {
+        Path dir = dataDir.resolve("corrupt-wal-reopen");
+        File walFile;
+
+        // A memtable threshold nothing can reach, so no flush happens and all three records stay in
+        // the WAL. Recovery therefore has to replay them rather than load segments -- which is what
+        // makes this exercise the WAL path end to end instead of only the segment path.
+        try (LSMTree<Integer> firstSession = new LSMTree<>(new IntegerKeyCodec(), dir, SAMPLE_EVERY,
+                1_000_000, new FullCompactStrategy<>(1000), new FullLoadMergeStrategy<>(new IntegerKeyCodec()))) {
+            firstSession.put(1, singleByteValue(1));
+            firstSession.put(2, singleByteValue(2));
+            firstSession.put(3, singleByteValue(3));
+            assertEquals(0, firstSession.segmentCount(), "sanity: nothing flushed, so the WAL holds all three");
+            walFile = firstSession.walFile();
+        }
+
+        // Each record is 20 (header) + 4 (key) + 14 (value) = 38 bytes, so record 3 spans [76,114).
+        // Truncating to 90 leaves it 14 bytes, short of the 20-byte header -- the commonest crash
+        // shape, a put that was still in flight and had not yet been acknowledged.
+        try (RandomAccessFile raf = new RandomAccessFile(walFile, "rw")) {
+            raf.setLength(90);
+        }
+
+        try (LSMTree<Integer> secondSession = new LSMTree<>(new IntegerKeyCodec(), dir, SAMPLE_EVERY,
+                1_000_000, new FullCompactStrategy<>(1000), new FullLoadMergeStrategy<>(new IntegerKeyCodec()))) {
+            assertAll(
+                    () -> assertEquals(singleByteValue(1), secondSession.get(1),
+                            "records durable before the crash must be recovered"),
+                    () -> assertEquals(singleByteValue(2), secondSession.get(2),
+                            "records durable before the crash must be recovered"),
+                    () -> assertNull(secondSession.get(3),
+                            "the record cut mid-write was never acknowledged and must not reappear")
+            );
+
+            // The point of an end-to-end test: the tree must be genuinely open and writable, not
+            // merely have survived the constructor.
+            secondSession.put(4, singleByteValue(4));
+            assertEquals(singleByteValue(4), secondSession.get(4),
+                    "the tree must accept writes after recovering from a truncated WAL");
         }
     }
 }
