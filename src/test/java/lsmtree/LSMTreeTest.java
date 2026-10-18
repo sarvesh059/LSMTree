@@ -1,6 +1,7 @@
 package lsmtree;
 
-import rbt.Entry;
+import core.Entry;
+import core.ScanCursor;
 import compaction.CompactStrategyImpl.FullCompactStrategy;
 import compaction.CompactStrategyImpl.LeveledCompactionStrategy;
 import compaction.CompactStrategyImpl.SizeTieredCompactStrategy;
@@ -55,7 +56,11 @@ public class LSMTreeTest {
     }
 
     private Value singleByteValue(int i) {
-        return Value.of(new byte[]{(byte) i});
+        return Value.of(singleByte(i));
+    }
+
+    private byte[] singleByte(int i) {
+        return new byte[]{(byte) i};
     }
 
     private void putFourKeysCrossingThreshold() throws IOException {
@@ -75,7 +80,7 @@ public class LSMTreeTest {
 
     private List<Entry<Integer, Value>> scanEntries(LSMTree<Integer> tree, int low, int high) throws IOException {
         List<Entry<Integer, Value>> result = new ArrayList<>();
-        try (EntrySource<Integer> cursor = tree.scan(low, high)) {
+        try (EntrySource<Integer> cursor = tree.scanValues(low, high)) {
             while (cursor.hasNext()) result.add(cursor.next());
         }
         return result;
@@ -115,7 +120,7 @@ public class LSMTreeTest {
     void flushedKeysReadableFromSSTable() throws IOException {
         putFourKeysCrossingThreshold();
 
-        assertAll(() -> assertEquals(0, lsmTree.memTableSizeInBytes(), "sanity check: flush already happened"), () -> assertEquals(singleByteValue(1), lsmTree.get(1), "key 1 should read back from the flushed segment"), () -> assertEquals(singleByteValue(2), lsmTree.get(2), "key 2 should read back from the flushed segment"), () -> assertEquals(singleByteValue(3), lsmTree.get(3), "key 3 should read back from the flushed segment"), () -> assertEquals(singleByteValue(4), lsmTree.get(4), "key 4 should read back from the flushed segment"));
+        assertAll(() -> assertEquals(0, lsmTree.memTableSizeInBytes(), "sanity check: flush already happened"), () -> assertArrayEquals(singleByte(1), lsmTree.get(1), "key 1 should read back from the flushed segment"), () -> assertArrayEquals(singleByte(2), lsmTree.get(2), "key 2 should read back from the flushed segment"), () -> assertArrayEquals(singleByte(3), lsmTree.get(3), "key 3 should read back from the flushed segment"), () -> assertArrayEquals(singleByte(4), lsmTree.get(4), "key 4 should read back from the flushed segment"));
     }
 
     @Test
@@ -124,7 +129,7 @@ public class LSMTreeTest {
 
         lsmTree.put(100, singleByteValue(100));
 
-        assertEquals(singleByteValue(100), lsmTree.get(100), "a key put after the flush should be retrievable from the fresh memTable");
+        assertArrayEquals(singleByte(100), lsmTree.get(100), "a key put after the flush should be retrievable from the fresh memTable");
     }
 
     @Test
@@ -134,7 +139,7 @@ public class LSMTreeTest {
         Value updated = Value.of("updated".getBytes(StandardCharsets.UTF_8));
         lsmTree.put(2, updated);
 
-        assertEquals(updated, lsmTree.get(2), "an update after flush should shadow the old value now sitting in the segment");
+        assertArrayEquals(updated.getData(), lsmTree.get(2), "an update after flush should shadow the old value now sitting in the segment");
     }
 
     @Test
@@ -142,7 +147,7 @@ public class LSMTreeTest {
         putFourKeysCrossingThreshold(); // key 3's original value is now in the segment
 
         lsmTree.put(3, Value.tombstone());
-        Value result = lsmTree.get(3);
+        Value result = lsmTree.getValue(3);
 
         assertAll(() -> assertNotNull(result, "a deleted key must return a Value, not null"), () -> assertTrue(result.isTombstone(), "should be a tombstone, not the stale segment value"));
     }
@@ -180,7 +185,7 @@ public class LSMTreeTest {
         lsmTree.put(1, updated);
         lsmTree.flush(); // segment 2: key 1 = updated
 
-        assertAll(() -> assertEquals(2, lsmTree.segmentCount(), "sanity check: two segments exist"), () -> assertEquals(updated, lsmTree.get(1), "the newer segment's value should shadow the older segment's value"));
+        assertAll(() -> assertEquals(2, lsmTree.segmentCount(), "sanity check: two segments exist"), () -> assertArrayEquals(updated.getData(), lsmTree.get(1), "the newer segment's value should shadow the older segment's value"));
     }
 
     @Test
@@ -191,7 +196,7 @@ public class LSMTreeTest {
         lsmTree.put(1, Value.tombstone());
         lsmTree.flush(); // segment 2: key 1 = tombstone
 
-        Value result = lsmTree.get(1);
+        Value result = lsmTree.getValue(1);
         assertAll(() -> assertEquals(2, lsmTree.segmentCount(), "sanity check: two segments exist"), () -> assertNotNull(result, "a deleted key must return a Value, not null"), () -> assertTrue(result.isTombstone(), "the newer segment's tombstone should hide the older segment's value"));
     }
 
@@ -203,7 +208,7 @@ public class LSMTreeTest {
         lsmTree.put(2, singleByteValue(2));
         lsmTree.flush(); // segment 2: key 2 only, does not contain key 1
 
-        assertAll(() -> assertEquals(2, lsmTree.segmentCount(), "sanity check: two segments exist"), () -> assertEquals(singleByteValue(1), lsmTree.get(1), "a key present only in an older segment should still be found by falling through the newer one"));
+        assertAll(() -> assertEquals(2, lsmTree.segmentCount(), "sanity check: two segments exist"), () -> assertArrayEquals(singleByte(1), lsmTree.get(1), "a key present only in an older segment should still be found by falling through the newer one"));
     }
 
     @Test
@@ -245,8 +250,8 @@ public class LSMTreeTest {
             tree.awaitCompaction();
             assertEquals(1, tree.segmentCount(), "crossing the compaction threshold should automatically merge back down to a single segment");
             assertAll(
-                    () -> assertEquals(singleByteValue(1), tree.get(1), "a key from the first (older) segment should survive the auto-compaction"),
-                    () -> assertEquals(singleByteValue(8), tree.get(8), "a key from the second (newer) segment should survive the auto-compaction")
+                    () -> assertArrayEquals(singleByte(1), tree.get(1), "a key from the first (older) segment should survive the auto-compaction"),
+                    () -> assertArrayEquals(singleByte(8), tree.get(8), "a key from the second (newer) segment should survive the auto-compaction")
             );
         }
     }
@@ -266,7 +271,7 @@ public class LSMTreeTest {
 
             assertAll(
                     () -> assertEquals(1, tree.segmentCount(), "compaction should merge both segments into one"),
-                    () -> assertEquals(updated, tree.get(1), "the newest value across the merged segments should survive compaction")
+                    () -> assertArrayEquals(updated.getData(), tree.get(1), "the newest value across the merged segments should survive compaction")
             );
         }
     }
@@ -280,7 +285,7 @@ public class LSMTreeTest {
             tree.put(1, Value.tombstone());
             tree.flush(); // segment 2: key 1 = tombstone
 
-            Value beforeCompact = tree.get(1);
+            Value beforeCompact = tree.getValue(1);
             assertNotNull(beforeCompact, "before compaction: the tombstone must still be visible, not null");
             assertTrue(beforeCompact.isTombstone(), "before compaction: should read as a tombstone shadowing the older value");
 
@@ -305,19 +310,19 @@ public class LSMTreeTest {
             tree.put(3, singleByteValue(3));
             tree.flush(); // segment 2: key2=updated, key3=3
 
-            Value key1Before = tree.get(1);
-            Value key2Before = tree.get(2);
-            Value key3Before = tree.get(3);
-            Value key999Before = tree.get(999);
+            byte[] key1Before = tree.get(1);
+            byte[] key2Before = tree.get(2);
+            byte[] key3Before = tree.get(3);
+            byte[] key999Before = tree.get(999);
 
             tree.sharedCompactionLogic(tree.segments());
 
             assertAll(
                     () -> assertEquals(1, tree.segmentCount(), "sanity check: compaction merged both segments into one"),
-                    () -> assertEquals(key1Before, tree.get(1), "a key present only in the older segment should read the same after compaction"),
-                    () -> assertEquals(key2Before, tree.get(2), "an updated key should still read its newest value after compaction"),
-                    () -> assertEquals(key3Before, tree.get(3), "a key present only in the newer segment should read the same after compaction"),
-                    () -> assertEquals(key999Before, tree.get(999), "an absent key should still be absent after compaction")
+                    () -> assertArrayEquals(key1Before, tree.get(1), "a key present only in the older segment should read the same after compaction"),
+                    () -> assertArrayEquals(key2Before, tree.get(2), "an updated key should still read its newest value after compaction"),
+                    () -> assertArrayEquals(key3Before, tree.get(3), "a key present only in the newer segment should read the same after compaction"),
+                    () -> assertArrayEquals(key999Before, tree.get(999), "an absent key should still be absent after compaction")
             );
         }
     }
@@ -501,9 +506,9 @@ public class LSMTreeTest {
             tree.awaitCompaction();
             assertAll(
                     () -> assertEquals(2, tree.segmentCount(), "S2 stays untouched; S1 and S3 merge into one"),
-                    () -> assertEquals(Value.of(new byte[]{2, 2, 2, 2}), tree.get(1),
+                    () -> assertArrayEquals(new byte[]{2, 2, 2, 2}, tree.get(1),
                             "key 1's true latest value lives in the untouched S2, not the merged segment's stale copy from S1"),
-                    () -> assertEquals(Value.of(new byte[]{4, 4, 4, 4}), tree.get(2),
+                    () -> assertArrayEquals(new byte[]{4, 4, 4, 4}, tree.get(2),
                             "key 2's true latest value lives in the merged segment (from S3), not S2's stale older copy")
             );
         }
@@ -548,7 +553,7 @@ public class LSMTreeTest {
         );
 
         for(int i=1;i<15;i++){
-            assertEquals(streamMergeTree.get(i), fullLoadMergeTree.get(i), "Both strategies should have same final state for key " + i);
+            assertArrayEquals(streamMergeTree.get(i), fullLoadMergeTree.get(i), "Both strategies should have same final state for key " + i);
         }
     }
 
@@ -601,8 +606,8 @@ public class LSMTreeTest {
 
         try (LSMTree<Integer> secondSession = new LSMTree<>(new IntegerKeyCodec(), dir, SAMPLE_EVERY, THRESHOLD,
                 new FullCompactStrategy<>(1000), new FullLoadMergeStrategy<>(new IntegerKeyCodec()))) {
-            assertEquals(singleByteValue(1), secondSession.get(1), "Reopening tree should recover memTable from WAl correctly");
-            assertEquals(singleByteValue(2), secondSession.get(2), "Reopening tree should recover memTable from WAl correctly");
+            assertArrayEquals(singleByte(1), secondSession.get(1), "Reopening tree should recover memTable from WAl correctly");
+            assertArrayEquals(singleByte(2), secondSession.get(2), "Reopening tree should recover memTable from WAl correctly");
         }
     }
 
@@ -625,9 +630,9 @@ public class LSMTreeTest {
             tree.awaitCompaction();
             assertAll(
                     () -> assertEquals(2, tree.segmentCount(), "S1 stays untouched; S3 and S2 merge into one"),
-                    () -> assertEquals(Value.tombstone(), tree.get(1),
+                    () -> assertEquals(Value.tombstone(), tree.getValue(1),
                             "key 1's true latest value tombstone is correctly retained"),
-                    () -> assertEquals(Value.of(new byte[]{4, 4, 4, 4}), tree.get(2),
+                    () -> assertArrayEquals(new byte[]{4, 4, 4, 4}, tree.get(2),
                             "key 2's true latest value lives in the merged segment (from S3)")
             );
         }
@@ -676,7 +681,7 @@ public class LSMTreeTest {
 
             assertEquals(2, tree.segmentCount(), "Tree should have 2 segments at this point");
 
-            try(EntrySource<Integer> cursor = tree.scan(7,7)){
+            try(EntrySource<Integer> cursor = tree.scanValues(7,7)){
                 tree.sharedCompactionLogic(tree.segments());
                 assertEquals(1, tree.segmentCount(),"Tree should have only 1 segment after compaction");
                 assertNull(tree.get(7),
@@ -711,7 +716,7 @@ public class LSMTreeTest {
             tree.flush();
             assertEquals(2, tree.segmentCount(), "sanity: two uncompacted segments");
 
-            try (EntrySource<Integer> heldCursor = tree.scan(1, 2)) {
+            try (EntrySource<Integer> heldCursor = tree.scanValues(1, 2)) {
                 tree.sharedCompactionLogic(tree.segments());
                 assertEquals(1, tree.segmentCount(), "the winner's install must succeed");
                 assertEquals(3, dataFiles(dir).length,
@@ -728,8 +733,8 @@ public class LSMTreeTest {
             assertEquals(List.of(survivingSegment), tree.segments(),
                     "a failed install must leave the segment list untouched, nothing appended");
             assertEquals(1, dataFiles(dir).length, "the abandoned output must be deleted, not orphaned");
-            assertEquals(singleByteValue(1), tree.get(1), "key 1 must still read correctly");
-            assertEquals(singleByteValue(2), tree.get(2), "key 2 must still read correctly");
+            assertArrayEquals(singleByte(1), tree.get(1), "key 1 must still read correctly");
+            assertArrayEquals(singleByte(2), tree.get(2), "key 2 must still read correctly");
         }
     }
 
@@ -779,7 +784,7 @@ public class LSMTreeTest {
             assertEquals(2, tree.segmentCount(),
                     "disjoint inputs must both install; 3 means one was wrongly abandoned");
             for (int key = 1; key <= 4; key++) {
-                assertEquals(singleByteValue(key), tree.get(key), "key " + key + " must survive both");
+                assertArrayEquals(singleByte(key), tree.get(key), "key " + key + " must survive both");
             }
         }
     }
@@ -799,7 +804,7 @@ public class LSMTreeTest {
             firstSession.put(2, singleByteValue(2));
             firstSession.flush();
 
-            try (EntrySource<Integer> heldCursor = firstSession.scan(1, 2)) {
+            try (EntrySource<Integer> heldCursor = firstSession.scanValues(1, 2)) {
                 firstSession.sharedCompactionLogic(firstSession.segments());
             }
 
@@ -816,8 +821,8 @@ public class LSMTreeTest {
         try (LSMTree<Integer> secondSession = new LSMTree<>(codec, dir, SAMPLE_EVERY, THRESHOLD,
                 new FullCompactStrategy<>(1000), new FullLoadMergeStrategy<>(codec))) {
             assertEquals(1, secondSession.segmentCount(), "reopen must recover only the winner's output");
-            assertEquals(singleByteValue(1), secondSession.get(1), "key 1 must survive the reopen");
-            assertEquals(singleByteValue(2), secondSession.get(2), "key 2 must survive the reopen");
+            assertArrayEquals(singleByte(1), secondSession.get(1), "key 1 must survive the reopen");
+            assertArrayEquals(singleByte(2), secondSession.get(2), "key 2 must survive the reopen");
         }
     }
 
@@ -848,9 +853,9 @@ public class LSMTreeTest {
         try (LSMTree<Integer> secondSession = new LSMTree<>(new IntegerKeyCodec(), dir, SAMPLE_EVERY,
                 1_000_000, new FullCompactStrategy<>(1000), new FullLoadMergeStrategy<>(new IntegerKeyCodec()))) {
             assertAll(
-                    () -> assertEquals(singleByteValue(1), secondSession.get(1),
+                    () -> assertArrayEquals(singleByte(1), secondSession.get(1),
                             "records durable before the crash must be recovered"),
-                    () -> assertEquals(singleByteValue(2), secondSession.get(2),
+                    () -> assertArrayEquals(singleByte(2), secondSession.get(2),
                             "records durable before the crash must be recovered"),
                     () -> assertNull(secondSession.get(3),
                             "the record cut mid-write was never acknowledged and must not reappear")
@@ -859,7 +864,7 @@ public class LSMTreeTest {
             // The point of an end-to-end test: the tree must be genuinely open and writable, not
             // merely have survived the constructor.
             secondSession.put(4, singleByteValue(4));
-            assertEquals(singleByteValue(4), secondSession.get(4),
+            assertArrayEquals(singleByte(4), secondSession.get(4),
                     "the tree must accept writes after recovering from a truncated WAL");
         }
     }
@@ -895,11 +900,71 @@ public class LSMTreeTest {
         }
 
         try (LSMTree<Integer> thirdSession = newTreeThatNeverFlushes(dir)) {
-            assertEquals(singleByteValue(4), thirdSession.get(4),
+            assertArrayEquals(singleByte(4), thirdSession.get(4),
                     "key 4 was acknowledged after recovery, so it must survive a later crash; if the "
                             + "corrupt tail had been left in place the next replay would stop short of it");
-            assertEquals(singleByteValue(1), thirdSession.get(1), "the original prefix must still be there");
+            assertArrayEquals(singleByte(1), thirdSession.get(1), "the original prefix must still be there");
             assertNull(thirdSession.get(3), "the record cut mid-write must stay gone");
+        }
+    }
+
+    @Test
+    void publicApiRoundTripsBytesAndReportsDeletedKeysAsAbsent() throws IOException {
+        try (LSMTree<Integer> tree = newTreeWithCompactionThreshold(dataDir.resolve("public-api"), 1000)) {
+            tree.put(1, singleByte(1));
+            tree.put(2, singleByte(2));
+
+            assertAll(
+                    () -> assertArrayEquals(singleByte(1), tree.get(1), "a stored value reads back as its own bytes"),
+                    () -> assertNull(tree.get(99), "a key never written reads as absent")
+            );
+
+            tree.delete(1);
+            assertNull(tree.get(1), "a deleted key reads as absent, with no tombstone surfacing to the caller");
+            assertArrayEquals(singleByte(2), tree.get(2), "deleting one key must not disturb another");
+
+            tree.flush();
+            assertNull(tree.get(1), "still absent once the tombstone is in a segment rather than the memTable");
+
+            // the cast is needed only in-package, where the package-private put(K, Value) overload is
+            // also visible; an external caller sees one put and needs no cast
+            assertThrows(IllegalArgumentException.class, () -> tree.put(3, (byte[]) null),
+                    "put must reject null rather than quietly storing a tombstone -- delete() is the explicit API");
+        }
+    }
+
+    @Test
+    void publicScanYieldsInRangeBytesAscendingAndSkipsDeletedKeys() throws IOException {
+        try (LSMTree<Integer> tree = newTreeWithCompactionThreshold(dataDir.resolve("public-scan"), 1000)) {
+            for (int key = 1; key <= 5; key++) tree.put(key, singleByte(key));
+            tree.delete(3);
+            tree.flush();
+            tree.put(6, singleByte(6)); // still in the memTable, so the scan must merge both sources
+
+            List<Integer> keys = new ArrayList<>();
+            List<byte[]> values = new ArrayList<>();
+            try (ScanCursor<Integer, byte[]> cursor = tree.scan(2, 5)) {
+                while (cursor.hasNext()) {
+                    Entry<Integer, byte[]> entry = cursor.next();
+                    keys.add(entry.getKey());
+                    values.add(entry.getValue());
+                }
+            }
+
+            assertAll(
+                    () -> assertEquals(List.of(2, 4, 5), keys,
+                            "scan is inclusive of both bounds, ascending, and omits the deleted key"),
+                    () -> assertArrayEquals(singleByte(2), values.get(0), "values arrive as raw bytes"),
+                    () -> assertArrayEquals(singleByte(4), values.get(1)),
+                    () -> assertArrayEquals(singleByte(5), values.get(2))
+            );
+
+            List<Integer> spanningKeys = new ArrayList<>();
+            try (ScanCursor<Integer, byte[]> cursor = tree.scan(1, 6)) {
+                while (cursor.hasNext()) spanningKeys.add(cursor.next().getKey());
+            }
+            assertEquals(List.of(1, 2, 4, 5, 6), spanningKeys,
+                    "a scan spanning the flushed segment and the live memTable must merge both");
         }
     }
 }

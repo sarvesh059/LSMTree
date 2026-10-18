@@ -136,7 +136,7 @@ public class YcsbStyleBenchmark {
             int scanLength = 1 + RNG.nextInt(MAX_SCAN_LENGTH);
             int high = low + scanLength - 1;
             long t0 = System.nanoTime();
-            try (EntrySource<Integer> cursor = tree.scan(low, high)) {
+            try (EntrySource<Integer> cursor = tree.scanValues(low, high)) {
                 while (cursor.hasNext()) cursor.next();
             }
             latencies[i] = System.nanoTime() - t0;

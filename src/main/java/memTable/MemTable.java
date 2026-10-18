@@ -1,6 +1,7 @@
 package memTable;
 
 import rbt.*;
+import core.Entry;
 import core.Value;
 import core.key.KeyCodec;
 

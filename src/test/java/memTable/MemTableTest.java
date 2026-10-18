@@ -1,6 +1,6 @@
 package memTable;
 
-import rbt.Entry;
+import core.Entry;
 import core.Value;
 import core.key.KeyCodecImpl.IntegerKeyCodec;
 import org.junit.jupiter.api.BeforeEach;

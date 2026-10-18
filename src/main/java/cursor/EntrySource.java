@@ -1,12 +1,7 @@
 package cursor;
 
-import rbt.Entry;
+import core.ScanCursor;
 import core.Value;
 
-import java.io.Closeable;
-import java.io.IOException;
-
-public interface EntrySource<K> extends Closeable {
-    boolean hasNext() throws IOException;
-    Entry<K, Value> next() throws IOException;
+public interface EntrySource<K> extends ScanCursor<K, Value> {
 }

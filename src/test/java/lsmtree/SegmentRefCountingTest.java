@@ -41,7 +41,7 @@ public class SegmentRefCountingTest {
         this.lsmTree.put(1, Value.of("test".getBytes(StandardCharsets.UTF_8)));
         this.lsmTree.flush();
 
-        Value value = this.lsmTree.get(1);
+        Value value = this.lsmTree.getValue(1);
 
         for(Segment<Integer> segment: this.lsmTree.segments()){
             assertEquals(0, segment.getRefCount(), "Segment ref count should be zero");
@@ -50,7 +50,7 @@ public class SegmentRefCountingTest {
 
     @Test
     void getReturnsRefCountToZeroAfterAMiss() throws IOException {
-        Value value = this.lsmTree.get(1);
+        Value value = this.lsmTree.getValue(1);
 
         for(Segment<Integer> segment: this.lsmTree.segments()){
             assertEquals(0, segment.getRefCount(), "Segment ref count should be zero");
@@ -63,7 +63,7 @@ public class SegmentRefCountingTest {
         this.lsmTree.flush();
 
         this.lsmTree.put(2, Value.of("AfterFlushKey".getBytes(StandardCharsets.UTF_8)));
-        Value value = this.lsmTree.get(2);
+        Value value = this.lsmTree.getValue(2);
 
         for(Segment<Integer> segment: this.lsmTree.segments()){
             assertEquals(0, segment.getRefCount(), "Segment ref count should be zero");
@@ -75,7 +75,7 @@ public class SegmentRefCountingTest {
         this.lsmTree.put(1, Value.of("test".getBytes(StandardCharsets.UTF_8)));
         this.lsmTree.flush();
 
-        try (EntrySource<Integer> cursor = this.lsmTree.scan(0, 10)) {
+        try (EntrySource<Integer> cursor = this.lsmTree.scanValues(0, 10)) {
             for (Segment<Integer> segment : this.lsmTree.segments()) {
                 assertEquals(1, segment.getRefCount(), "Segment should stay pinned while the scan cursor is still open");
             }
@@ -93,7 +93,7 @@ public class SegmentRefCountingTest {
         this.lsmTree.put(3, Value.of("c".getBytes(StandardCharsets.UTF_8)));
         this.lsmTree.flush();
 
-        try (EntrySource<Integer> cursor = this.lsmTree.scan(0, 10)) {
+        try (EntrySource<Integer> cursor = this.lsmTree.scanValues(0, 10)) {
             assertTrue(cursor.hasNext(), "sanity check: the scan should have at least one entry");
             cursor.next();
         }
@@ -116,7 +116,7 @@ public class SegmentRefCountingTest {
         Segment<Integer> inRangeSegment = this.lsmTree.segments().get(0);
         Segment<Integer> outOfRangeSegment = this.lsmTree.segments().get(1);
 
-        EntrySource<Integer> cursor = this.lsmTree.scan(0, 10);
+        EntrySource<Integer> cursor = this.lsmTree.scanValues(0, 10);
         try {
             assertEquals(1, inRangeSegment.getRefCount(),
                     "the segment overlapping [0,10] should be pinned for the cursor's lifetime");
@@ -138,7 +138,7 @@ public class SegmentRefCountingTest {
 
         assertEquals(0, this.lsmTree.openVersionPinCount(), "sanity check: nothing open yet");
 
-        try (EntrySource<Integer> cursor = this.lsmTree.scan(0, 10)) {
+        try (EntrySource<Integer> cursor = this.lsmTree.scanValues(0, 10)) {
             assertEquals(1, this.lsmTree.openVersionPinCount(), "should be tracked while the cursor is open");
         }
 
@@ -170,7 +170,7 @@ public class SegmentRefCountingTest {
         this.lsmTree.put(1, Value.of("a".getBytes(StandardCharsets.UTF_8)));
         this.lsmTree.flush();
 
-        try (EntrySource<Integer> cursor = this.lsmTree.scan(0, 10)) {
+        try (EntrySource<Integer> cursor = this.lsmTree.scanValues(0, 10)) {
             long age = this.lsmTree.oldestOpenPinAgeInMillis();
             assertTrue(age >= 0, "should report a real, non-negative age while a scan is open");
         }

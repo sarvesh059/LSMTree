@@ -1,6 +1,6 @@
 package sstable;
 
-import rbt.Entry;
+import core.Entry;
 import core.IndexEntry;
 import core.Value;
 import core.key.KeyCodecImpl.IntegerKeyCodec;

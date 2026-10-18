@@ -1,6 +1,6 @@
 package compaction.MergeStrategyImpl;
 
-import rbt.Entry;
+import core.Entry;
 import sstable.SSTable;
 import compaction.MergeStrategy;
 import constants.FileConstants;

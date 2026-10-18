@@ -1,4 +1,4 @@
-package rbt;
+package core;
 
 public class Entry<K,V> {
     private final K key;

@@ -1,6 +1,6 @@
 package sstable;
 
-import rbt.Entry;
+import core.Entry;
 import bloomFilter.BloomFilter;
 import core.DataFileMetaData;
 import core.IndexEntry;

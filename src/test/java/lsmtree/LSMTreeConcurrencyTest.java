@@ -1,6 +1,6 @@
 package lsmtree;
 
-import rbt.Entry;
+import core.Entry;
 import compaction.CompactStrategyImpl.FullCompactStrategy;
 import compaction.MergeStrategyImpl.FullLoadMergeStrategy;
 import core.Value;
@@ -78,7 +78,7 @@ public class LSMTreeConcurrencyTest {
                     while (!stop.get()) {
                         int key = (int) (Math.random() * totalKeySpaceHigh);
                         tree.get(key);
-                        Value value = tree.get(sentinel);
+                        Value value = tree.getValue(sentinel);
                         assertNotNull(value);
                         assertEquals(sentinelValue, new String(value.getData(), StandardCharsets.UTF_8));
                     }
@@ -93,7 +93,7 @@ public class LSMTreeConcurrencyTest {
                 try {
                     while (!stop.get()) {
                         Integer prevKey = null;
-                        try (EntrySource<Integer> cursor = tree.scan(0, totalKeySpaceHigh)) {
+                        try (EntrySource<Integer> cursor = tree.scanValues(0, totalKeySpaceHigh)) {
                             while (cursor.hasNext()) {
                                 Entry<Integer, Value> e = cursor.next();
                                 if (prevKey != null && e.getKey() <= prevKey) {
@@ -133,21 +133,21 @@ public class LSMTreeConcurrencyTest {
             int base = keyBase(p);
             for (int k = 0; k < KEYS_PER_PUTTER; k++) {
                 int key = base + k;
-                Value finalValue = Value.of(("final-" + key).getBytes(StandardCharsets.UTF_8));
+                byte[] finalValue = ("final-" + key).getBytes(StandardCharsets.UTF_8);
                 tree.put(key, finalValue);
-                expected.put(key, finalValue);
+                expected.put(key, Value.of(finalValue));
             }
         }
         tree.flush();
 
         for (Map.Entry<Integer, Value> entry : expected.entrySet()) {
-            assertEquals(entry.getValue(), tree.get(entry.getKey()),
+            assertArrayEquals(entry.getValue().getData(), tree.get(entry.getKey()),
                     "key " + entry.getKey() + " should hold its final deterministic value after the stress phase settled");
         }
 
         Map<Integer, Value> scanned = new HashMap<>();
         Integer prevKey = null;
-        try (EntrySource<Integer> cursor = tree.scan(0, totalKeySpaceHigh)) {
+        try (EntrySource<Integer> cursor = tree.scanValues(0, totalKeySpaceHigh)) {
             while (cursor.hasNext()) {
                 Entry<Integer, Value> e = cursor.next();
                 assertTrue(prevKey == null || e.getKey() > prevKey, "final scan must be strictly ascending");
@@ -203,7 +203,7 @@ public class LSMTreeConcurrencyTest {
             try {
                 for (int round = 0; round < 500 && failure.get() == null; round++) {
                     java.util.Set<Integer> seen = new java.util.HashSet<>();
-                    try (EntrySource<Integer> cursor = tree.scan(0, keySpace - 1)) {
+                    try (EntrySource<Integer> cursor = tree.scanValues(0, keySpace - 1)) {
                         while (cursor.hasNext()) seen.add(cursor.next().getKey());
                     }
                     if (seen.size() != keySpace) {

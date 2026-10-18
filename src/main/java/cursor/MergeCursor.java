@@ -1,6 +1,6 @@
 package cursor;
 
-import rbt.Entry;
+import core.Entry;
 import core.Value;
 
 import java.io.IOException;

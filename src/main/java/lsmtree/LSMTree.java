@@ -1,6 +1,6 @@
 package lsmtree;
 
-import rbt.Entry;
+import core.Entry;
 import sstable.SSTable;
 import wal.WAL;
 import compaction.CompactionStrategy;
@@ -123,7 +123,18 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         this.compactionService.checkAndCompactAsync();
     }
 
-    public synchronized void put(K key, Value value) throws IOException {
+    public void put(K key, byte[] value) throws IOException {
+        if (value == null) {
+            throw new IllegalArgumentException("value must not be null; use delete(key) to remove a key");
+        }
+        put(key, Value.of(value));
+    }
+
+    public void delete(K key) throws IOException {
+        put(key, Value.tombstone());
+    }
+
+    synchronized void put(K key, Value value) throws IOException {
         Version<K> currentVersion = this.version.get();
 
         Value valueWithId = Value.withId(this.eventCounter.incrementAndGet(), value);
@@ -134,7 +145,12 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         if (currentVersion.memTable().isFull()) this.flush();
     }
 
-    public Value get(K key) throws IOException {
+    public byte[] get(K key) throws IOException {
+        Value value = getValue(key);
+        return value == null || value.isTombstone() ? null : value.getData();
+    }
+
+    Value getValue(K key) throws IOException {
         this.getCallCount++;
         Version<K> currentVersion = this.version.get();
 
@@ -176,7 +192,28 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         this.compactionService.sharedCompactionLogic(selectedSegments);
     }
 
-    EntrySource<K> scan(K low, K high) throws IOException {
+    public ScanCursor<K, byte[]> scan(K low, K high) throws IOException {
+        EntrySource<K> source = scanValues(low, high);
+        return new ScanCursor<K, byte[]>() {
+            @Override
+            public boolean hasNext() throws IOException {
+                return source.hasNext();
+            }
+
+            @Override
+            public Entry<K, byte[]> next() throws IOException {
+                Entry<K, Value> entry = source.next();
+                return new Entry<>(entry.getKey(), entry.getValue().getData());
+            }
+
+            @Override
+            public void close() throws IOException {
+                source.close();
+            }
+        };
+    }
+
+    EntrySource<K> scanValues(K low, K high) throws IOException {
         List<EntrySource<K>> cursors = new ArrayList<>();
         byte[] encodedLow = this.codec.encodeKey(low);
         byte[] encodedHigh = this.codec.encodeKey(high);
