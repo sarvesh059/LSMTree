@@ -3,7 +3,7 @@ package compaction.MergeStrategyImpl;
 import compaction.TombStoneRetentionPolicyImpl.CoverageBasedTombStoneRetentionPolicy;
 import core.SegmentFiles;
 import cursor.EntrySource;
-import SSTable.SSTable;
+import sstable.SSTable;
 import compaction.MergeStrategy;
 import core.Segment;
 import core.key.KeyCodec;

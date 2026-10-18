@@ -1,6 +1,6 @@
 package memTable;
 
-import RBT.*;
+import rbt.*;
 import core.Value;
 
 import java.util.List;

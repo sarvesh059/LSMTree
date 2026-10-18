@@ -10,9 +10,9 @@ public class BloomFilter {
     private final int totalHashFunctions;
     private final BitSet bits;
 
-    private final long FNV_OFFSET_BASIS = 0xcbf29ce484222325L;
-    private final long FNV_PRIME = 0x100000001b3L;
-    private final long H2_SEED = 0x9e3779b97f4a7c15L;
+    private static final long FNV_OFFSET_BASIS = 0xcbf29ce484222325L;
+    private static final long FNV_PRIME = 0x100000001b3L;
+    private static final long H2_SEED = 0x9e3779b97f4a7c15L;
 
     public BloomFilter(int expectedEntries, double falsePositiveRate){
         this.bitArraySize = computeBitArraySize(expectedEntries, falsePositiveRate);

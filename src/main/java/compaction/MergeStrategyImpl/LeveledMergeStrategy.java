@@ -1,7 +1,7 @@
 package compaction.MergeStrategyImpl;
 
-import RBT.Entry;
-import SSTable.SSTable;
+import rbt.Entry;
+import sstable.SSTable;
 import compaction.MergeStrategy;
 import compaction.TombStoneRetentionPolicyImpl.CoverageBasedTombStoneRetentionPolicy;
 import core.Segment;

@@ -26,7 +26,7 @@ public class SizeTieredCompactStrategy<K extends Comparable<K>> implements Compa
     @Override
     public List<Segment<K>> select(List<Segment<K>> segments) {
         List<List<Segment<K>>> segmentBuckets = bucketSegments(segments);
-        return segmentBuckets.isEmpty()? null : segmentBuckets.getFirst();
+        return segmentBuckets.isEmpty() ? List.of() : segmentBuckets.getFirst();
     }
 
     private List<List<Segment<K>>> bucketSegments(List<Segment<K>> segments){

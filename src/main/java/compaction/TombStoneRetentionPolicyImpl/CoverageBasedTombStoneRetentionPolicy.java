@@ -1,6 +1,6 @@
 package compaction.TombStoneRetentionPolicyImpl;
 
-import RBT.Entry;
+import rbt.Entry;
 import cursor.TombStoneRetentionPolicy;
 import core.Segment;
 import core.Value;

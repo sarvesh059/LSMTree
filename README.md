@@ -75,7 +75,7 @@ excluded from `mvn test`. Run one directly against the test classpath:
 
 ```bash
 mvn -q test-compile
-java -cp target/classes:target/test-classes LSMTree.CompactionAmplificationBenchmark
+java -cp target/classes:target/test-classes lsmtree.CompactionAmplificationBenchmark
 ```
 
 ## Benchmarks

@@ -1,6 +1,6 @@
 package service;
 
-import LSMTree.Version;
+import lsmtree.Version;
 import constants.FileConstants;
 import core.Segment;
 import manifest.Manifest;

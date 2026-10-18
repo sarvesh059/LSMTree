@@ -7,9 +7,9 @@ import java.util.*;
 
 public class LeveledCompactionStrategy<K extends Comparable<K>> implements CompactionStrategy<K> {
 
-    private final int L0THRESHOLD = 4;
-    private final int LEVELSIZEMULTIPLIER = 10;
-    private final long BASESIZEINBYTES = 1024*1024;
+    private static final int L0_THRESHOLD = 4;
+    private static final int LEVEL_SIZE_MULTIPLIER = 10;
+    private static final long BASE_SIZE_IN_BYTES = 1024 * 1024;
     private final Map<Integer, byte[]> compactPointer = new HashMap<>();
     @Override
     public boolean shouldCompact(List<Segment<K>> segments) {
@@ -22,7 +22,7 @@ public class LeveledCompactionStrategy<K extends Comparable<K>> implements Compa
         List<List<Segment<K>>> resultingSegments = new ArrayList<>();
         for(Map.Entry<Integer,List<Segment<K>>> entry: levels.entrySet()){
             if(entry.getKey() == 0){
-                if(entry.getValue().size() >= L0THRESHOLD){
+                if(entry.getValue().size() >= L0_THRESHOLD){
                     return true;
                 }
             }
@@ -32,7 +32,7 @@ public class LeveledCompactionStrategy<K extends Comparable<K>> implements Compa
                 long totalSize = levelSegments.stream()
                         .mapToLong(levelSegment -> levelSegment.getDataFile().length())
                         .sum();
-                if(totalSize >= Math.pow(LEVELSIZEMULTIPLIER, level-1)* BASESIZEINBYTES){
+                if(totalSize >= Math.pow(LEVEL_SIZE_MULTIPLIER, level-1)* BASE_SIZE_IN_BYTES){
                     return true;
                 }
             }
@@ -51,7 +51,7 @@ public class LeveledCompactionStrategy<K extends Comparable<K>> implements Compa
 
         for(Map.Entry<Integer,List<Segment<K>>> entry: levels.entrySet()){
             if(entry.getKey() == 0){
-                if(entry.getValue().size() >= L0THRESHOLD){
+                if(entry.getValue().size() >= L0_THRESHOLD){
                     List<Segment<K>> levelSegments = entry.getValue();
                     var minMaxKeyRef = new Object() {
                         byte[] maxKey = levelSegments.getFirst().getMaxKey();
@@ -81,7 +81,7 @@ public class LeveledCompactionStrategy<K extends Comparable<K>> implements Compa
                 long totalSize = levelSegments.stream()
                         .mapToLong(levelSegment -> levelSegment.getDataFile().length())
                         .sum();
-                if(totalSize >= Math.pow(LEVELSIZEMULTIPLIER, level-1)* BASESIZEINBYTES){
+                if(totalSize >= Math.pow(LEVEL_SIZE_MULTIPLIER, level-1)* BASE_SIZE_IN_BYTES){
                     byte[] lastCompactedLevelKey = compactPointer.get(level);
                     Segment<K> nextSegmentToBeCompacted = levelSegments.stream()
                             .filter(kSegment -> Arrays.compareUnsigned(kSegment.getMinKey(), lastCompactedLevelKey)> 0)

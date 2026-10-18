@@ -27,7 +27,7 @@ case "$PHASE" in
   *) phases="fill_sync,settle,$PHASE" ;;
 esac
 ASPROF="$ASPROF" "${PIN[@]}" java $JAVA_OPTS -XX:+EnableDynamicAgentLoading -XX:+UnlockDiagnosticVMOptions -XX:+DebugNonSafepoints \
-  -cp "$BUILD/classes${JAVA_CP_EXTRA:+:$JAVA_CP_EXTRA}" LSMTree.KvBench \
+  -cp "$BUILD/classes${JAVA_CP_EXTRA:+:$JAVA_CP_EXTRA}" lsmtree.KvBench \
   --db "$DATA_DIR" --phases "$phases" --profile-phase "$PHASE" --profile-event "$EVENT" --profile-out "$OUT"
 rm -rf "$DATA_DIR"
 echo "Flame graph: $OUT"

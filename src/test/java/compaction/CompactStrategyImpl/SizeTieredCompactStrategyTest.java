@@ -100,7 +100,7 @@ public class SizeTieredCompactStrategyTest {
 
         assertAll(
                 () -> assertFalse(strategy.shouldCompact(List.of())),
-                () -> assertNull(strategy.select(List.of()))
+                () -> assertTrue(strategy.select(List.of()).isEmpty())
         );
     }
 
@@ -111,7 +111,7 @@ public class SizeTieredCompactStrategyTest {
 
         assertAll(
                 () -> assertFalse(strategy.shouldCompact(segments)),
-                () -> assertNull(strategy.select(segments))
+                () -> assertTrue(strategy.select(segments).isEmpty())
         );
     }
 }

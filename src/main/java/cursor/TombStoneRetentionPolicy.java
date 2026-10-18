@@ -1,6 +1,6 @@
 package cursor;
 
-import RBT.Entry;
+import rbt.Entry;
 import core.Value;
 
 public interface TombStoneRetentionPolicy <K> {

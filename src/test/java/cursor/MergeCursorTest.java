@@ -1,7 +1,7 @@
 package cursor;
 
-import RBT.Entry;
-import SSTable.SSTable;
+import rbt.Entry;
+import sstable.SSTable;
 import core.Value;
 import core.key.KeyCodecImpl.IntegerKeyCodec;
 import org.junit.jupiter.api.Test;

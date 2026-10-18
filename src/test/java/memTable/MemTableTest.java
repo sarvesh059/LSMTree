@@ -1,6 +1,6 @@
 package memTable;
 
-import RBT.Entry;
+import rbt.Entry;
 import core.Value;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

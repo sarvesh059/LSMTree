@@ -1,7 +1,7 @@
 package compaction.TombStoneRetentionPolicyImpl;
 
-import RBT.Entry;
-import SSTable.SSTable;
+import rbt.Entry;
+import sstable.SSTable;
 import bloomFilter.BloomFilter;
 import core.Segment;
 import core.Value;

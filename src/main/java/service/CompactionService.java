@@ -1,6 +1,6 @@
 package service;
 
-import LSMTree.Version;
+import lsmtree.Version;
 import compaction.CompactionStrategy;
 import compaction.MergeStrategy;
 import constants.FileConstants;

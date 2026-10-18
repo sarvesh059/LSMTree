@@ -25,12 +25,12 @@ build() {
   rm -rf "$BUILD/classes" && mkdir -p "$BUILD/classes"
   # shellcheck disable=SC2046
   javac -nowarn -d "$BUILD/classes" ${JAVA_CP_EXTRA:+-cp "$JAVA_CP_EXTRA"} \
-    $(find "$SRC" -name '*.java') "$KIT"/java/LSMTree/*.java
+    $(find "$SRC" -name '*.java') "$KIT"/java/lsmtree/*.java
 }
 
 engine_cmd() {  # engine_cmd <engine> -> prints nothing, fills CMD array
   case "$1" in
-    candidate) CMD=(java $JAVA_OPTS -cp "$BUILD/classes${JAVA_CP_EXTRA:+:$JAVA_CP_EXTRA}" LSMTree.KvBench) ;;
+    candidate) CMD=(java $JAVA_OPTS -cp "$BUILD/classes${JAVA_CP_EXTRA:+:$JAVA_CP_EXTRA}" lsmtree.KvBench) ;;
     leveldb|rocksdb) CMD=("$BUILD/kvbench" --engine "$1") ;;
     *) echo "unknown engine $1" >&2; exit 64 ;;
   esac
