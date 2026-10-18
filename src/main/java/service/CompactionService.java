@@ -4,22 +4,20 @@ import LSMTree.Version;
 import compaction.CompactionStrategy;
 import compaction.MergeStrategy;
 import constants.FileConstants;
+import core.FileUtils;
 import core.Segment;
 import core.SegmentFiles;
 import manifest.Manifest;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -38,6 +36,7 @@ public class CompactionService<K extends Comparable<K>> {
     private final CleanUpService<K> cleanUpService;
     private final ExecutorService compactionExecutor = Executors.newSingleThreadExecutor();
     private final AtomicBoolean compactionInProgress = new AtomicBoolean(false);
+    private final SegmentFileFactory segmentFileFactory;
 
     public CompactionService(Path dataDir, int indexSampleRate, CompactionStrategy<K> compactionStrategy,
                               MergeStrategy<K> mergeStrategy, AtomicReference<Version<K>> version,
@@ -49,6 +48,7 @@ public class CompactionService<K extends Comparable<K>> {
         this.version = version;
         this.manifestLock = manifestLock;
         this.cleanUpService = cleanUpService;
+        this.segmentFileFactory = new SegmentFileFactory(dataDir, manifestLock);
     }
 
     public void checkAndCompactAsync() {
@@ -67,24 +67,11 @@ public class CompactionService<K extends Comparable<K>> {
     void sharedCompactionLogic(List<Segment<K>> selectedSegments, List<Segment<K>> segmentsSnapshot) throws IOException {
         File manifestFile = manifestFile();
         Supplier<SegmentFiles> fileFactory = () -> {
-            String uuid = UUID.randomUUID().toString();
-            String wipDataFileName = FileConstants.WIP_FILE_PREFIX + FileConstants.DATA_FILE_PREFIX + uuid;
-            String indexFileName = FileConstants.INDEX_FILE_PREFIX + uuid;
-            String bloomFilterFileName = FileConstants.BLOOM_FILTER_FILE_PREFIX + uuid;
-
-            synchronized (this.manifestLock) {
-                try {
-                    Manifest.append(wipDataFileName, manifestFile);
-                } catch (IOException e) {
-                    throw new RuntimeException(e);
-                }
+            try {
+                return this.segmentFileFactory.create();
+            } catch (IOException e) {
+                throw new RuntimeException(e);
             }
-
-            return new SegmentFiles(
-                    this.dataDir.resolve(wipDataFileName).toFile(),
-                    this.dataDir.resolve(indexFileName).toFile(),
-                    this.dataDir.resolve(bloomFilterFileName).toFile()
-            );
         };
 
         List<Segment<K>> pinnedSegments = new ArrayList<>();
@@ -101,21 +88,12 @@ public class CompactionService<K extends Comparable<K>> {
         List<Segment<K>> newSegments = new ArrayList<>();
         List<String> newDataFileNames = new ArrayList<>();
         for (Segment<K> wipSegment : wipSegments) {
-            String wipDataFileName = wipSegment.getDataFile().getName();
-            String dataFileName = wipDataFileName.substring(FileConstants.WIP_FILE_PREFIX.length());
-            File dataFile = this.dataDir.resolve(dataFileName).toFile();
-
-            Files.move(wipSegment.getDataFile().toPath(), dataFile.toPath(), StandardCopyOption.ATOMIC_MOVE);
-
-            Segment<K> finalSegment = new Segment<>(dataFile, wipSegment.getIndexFile(), wipSegment.getBloomFilterFile(),
-                    wipSegment.getLoadedIndex(), wipSegment.getBloomFilter(), wipSegment.getEntryCount(), wipSegment.getMaxEventId());
-            finalSegment.setLevel(wipSegment.getLevel());
-            finalSegment.setMinKey(wipSegment.getMinKey());
-            finalSegment.setMaxKey(wipSegment.getMaxKey());
-
+            Segment<K> finalSegment = this.segmentFileFactory.promote(wipSegment);
             newSegments.add(finalSegment);
-            newDataFileNames.add(dataFileName);
+            newDataFileNames.add(finalSegment.getDataFile().getName());
         }
+
+        FileUtils.fsyncDirectory(this.dataDir);
 
         selectedSegments.forEach(Segment::unpin);
         if(!tryReplaceSegments(selectedSegments, newSegments)){
@@ -195,5 +173,4 @@ public class CompactionService<K extends Comparable<K>> {
 
         return segmentListUnchanged.get();
     }
-
 }

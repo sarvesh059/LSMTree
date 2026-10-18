@@ -51,10 +51,14 @@ public class RecoveryService<K extends Comparable<K>> {
 
         LinkedHashSet<String> liveDataFiles = new LinkedHashSet<>();
         LinkedHashSet<String> pendingDeletionDataFiles = new LinkedHashSet<>();
+        LinkedHashSet<String> wipDataFiles = new LinkedHashSet<>();
         if(manifestFile.exists()){
             List<String> dataFilesNames = Manifest.readAll(manifestFile);
             for (String fileName : dataFilesNames) {
-                if (fileName.startsWith(FileConstants.WIP_FILE_PREFIX)) continue;
+                if (fileName.startsWith(FileConstants.WIP_FILE_PREFIX)) {
+                    wipDataFiles.add(fileName.substring(FileConstants.WIP_FILE_PREFIX.length()));
+                    continue;
+                }
                 if (fileName.startsWith(FileConstants.DELETED_FILE_PREFIX)) {
                     String underlyingName = fileName.substring(FileConstants.DELETED_FILE_PREFIX.length());
                     liveDataFiles.remove(underlyingName);
@@ -71,20 +75,30 @@ public class RecoveryService<K extends Comparable<K>> {
                 File dataFile = this.dataDir.resolve(dataFileName).toFile();
                 File indexFile = this.dataDir.resolve(indexFileName).toFile();
                 File bloomFilterFile = this.dataDir.resolve(bloomFilterFileName).toFile();
-                if (dataFile.exists() && indexFile.exists() && bloomFilterFile.exists()) {
-                    try (RandomAccessFile bloomFilterFileReader = new RandomAccessFile(bloomFilterFile, "r")) {
-                        List<IndexEntry> index = this.ssTable.loadIndex(indexFile);
-                        byte[] minKey = this.ssTable.minKey(dataFile, index);
-                        byte[] maxKey = this.ssTable.maxKey(dataFile, index);
-                        DataFileMetaData dataFileMetaData = this.ssTable.getMetaData(dataFile);
-                        Segment<K> segment = new Segment<>(dataFile, indexFile, bloomFilterFile, index,
-                                BloomFilter.readFrom(bloomFilterFileReader), dataFileMetaData.entryCount(), dataFileMetaData.maxEventId());
-                        segment.setMinKey(minKey);
-                        segment.setMaxKey(maxKey);
-                        segment.setLevel(dataFileMetaData.level());
-                        maxEventId = Math.max(maxEventId, segment.getMaxEventId());
-                        segments.add(segment);
-                    }
+                boolean dataFileExists = dataFile.exists();
+                boolean indexFileExists = indexFile.exists();
+                boolean bloomFilterExists = bloomFilterFile.exists();
+                if (!dataFileExists || !indexFileExists || !bloomFilterExists) {
+                    throw new IOException(String.format(
+                            "%s is listed live in %s but its files are incomplete "
+                                    + "(dataFile=%b, indexFile=%b, bloomFilter=%b). Refusing to open rather "
+                                    + "than serve incomplete reads; remove that entry from the manifest to "
+                                    + "open without this segment.",
+                            dataFileName, manifestFile, dataFileExists, indexFileExists, bloomFilterExists));
+                }
+
+                try (RandomAccessFile bloomFilterFileReader = new RandomAccessFile(bloomFilterFile, "r")) {
+                    List<IndexEntry> index = this.ssTable.loadIndex(indexFile);
+                    byte[] minKey = this.ssTable.minKey(dataFile, index);
+                    byte[] maxKey = this.ssTable.maxKey(dataFile, index);
+                    DataFileMetaData dataFileMetaData = this.ssTable.getMetaData(dataFile);
+                    Segment<K> segment = new Segment<>(dataFile, indexFile, bloomFilterFile, index,
+                            BloomFilter.readFrom(bloomFilterFileReader), dataFileMetaData.entryCount(), dataFileMetaData.maxEventId());
+                    segment.setMinKey(minKey);
+                    segment.setMaxKey(maxKey);
+                    segment.setLevel(dataFileMetaData.level());
+                    maxEventId = Math.max(maxEventId, segment.getMaxEventId());
+                    segments.add(segment);
                 }
             }
         }
@@ -103,13 +117,29 @@ public class RecoveryService<K extends Comparable<K>> {
             try {
                 deleteSegmentFilesByName(dataFileName);
             } catch (IOException e) {
-                System.err.println("WARNING: failed to physically delete orphaned segment file "
+                LOG.log(System.Logger.Level.WARNING, "failed to physically delete orphaned segment file "
                         + dataFileName + " left over from a prior crash: " + e.getMessage());
             }
         }
-        if (!pendingDeletionDataFiles.isEmpty()) {
-            synchronized (this.manifestLock) {
-                Manifest.rewrite(new ArrayList<>(liveDataFiles), manifestFile);
+        for (String dataFileName : wipDataFiles) {
+            if (liveDataFiles.contains(dataFileName)) continue;
+            try {
+                Files.deleteIfExists(this.dataDir.resolve(FileConstants.WIP_FILE_PREFIX + dataFileName));
+                deleteSegmentFilesByName(dataFileName);
+            } catch (IOException e) {
+                LOG.log(System.Logger.Level.WARNING, "failed to delete incomplete segment "
+                        + dataFileName + " left over from a prior crash: " + e.getMessage());
+            }
+        }
+
+        if (!pendingDeletionDataFiles.isEmpty() || !wipDataFiles.isEmpty()) {
+            try {
+                synchronized (this.manifestLock) {
+                    Manifest.rewrite(new ArrayList<>(liveDataFiles), manifestFile);
+                }
+            } catch (IOException e) {
+                LOG.log(System.Logger.Level.WARNING, "could not compact the manifest at " + manifestFile
+                        + "; opening anyway with its uncompacted contents: " + e.getMessage());
             }
         }
 

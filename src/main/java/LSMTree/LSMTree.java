@@ -16,6 +16,7 @@ import manifest.Manifest;
 import memTable.MemTable;
 import service.CleanUpService;
 import service.CompactionService;
+import service.SegmentFileFactory;
 import service.RecoveryService;
 
 import java.io.Closeable;
@@ -44,6 +45,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
     private final Object manifestLock = new Object();
     private final Map<Object, Long> openVersionPins = new ConcurrentHashMap<>();
     private final CompactionService<K> compactionService;
+    private final SegmentFileFactory segmentFileFactory;
     private final CleanUpService<K> cleanUpService;
     private final RecoveryService<K> recoveryService;
     private final TombStoneRetentionPolicy<K> tombStoneRetentionPolicy;
@@ -60,13 +62,24 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         this.eventCounter = new AtomicLong(0);
 
         this.cleanUpService = new CleanUpService<>(dataDir, this.version, this.manifestLock, this::oldestOpenPinAgeInMillis);
+        this.segmentFileFactory = new SegmentFileFactory(dataDir, this.manifestLock);
         this.compactionService = new CompactionService<>(dataDir, indexSampleRate, compactionStrategy, mergeStrategy,
                 this.version, this.manifestLock, this.cleanUpService);
         this.recoveryService = new RecoveryService<K>(dataDir, this.ssTable, this.wal, memTableThreshold,
                 this.version, this.manifestLock);
 
-        long maxEventId = this.recoveryService.recover();
-        this.eventCounter.set(maxEventId);
+        try {
+            long maxEventId = this.recoveryService.recover();
+            this.eventCounter.set(maxEventId);
+        } catch (IOException | RuntimeException e) {
+            try {
+                this.wal.close();
+            } catch (IOException closeFailure) {
+                e.addSuppressed(closeFailure);
+            }
+            this.compactionService.shutdown();
+            throw e;
+        }
         this.compactionService.checkAndCompactAsync();
         this.tombStoneRetentionPolicy = new DropAllTombStoneRetentionPolicy<>();
     }
@@ -85,21 +98,19 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
                 .max(Comparator.comparing(Entry::getKey))
                 .orElseThrow()
                 .getKey();
-        String dataFileId = UUID.randomUUID().toString();
-        String dataFileName = FileConstants.DATA_FILE_PREFIX + dataFileId;
-        String indexFileName = FileConstants.INDEX_FILE_PREFIX + dataFileId;
-        String bloomFilterFileName = FileConstants.BLOOM_FILTER_FILE_PREFIX + dataFileId;
+        SegmentFiles segmentFiles = this.segmentFileFactory.create();
 
-        File dataFile = this.dataDir.resolve(dataFileName).toFile();
-        File indexFile = this.dataDir.resolve(indexFileName).toFile();
-        File bloomFilterFile = this.dataDir.resolve(bloomFilterFileName).toFile();
+        Segment<K> wipSegment = this.ssTable.write(memTableEntries, segmentFiles.dataFile(),
+                segmentFiles.indexFile(), segmentFiles.bloomFilterFile(), this.indexSampleRate, 0);
+        wipSegment.setMinKey(this.codec.encodeKey(minKey));
+        wipSegment.setMaxKey(this.codec.encodeKey(maxKey));
 
-        Segment<K> segment = this.ssTable.write(memTableEntries, dataFile, indexFile, bloomFilterFile, this.indexSampleRate, 0);
-        segment.setMinKey(this.codec.encodeKey(minKey));
-        segment.setMaxKey(this.codec.encodeKey(maxKey));
+        Segment<K> segment = this.segmentFileFactory.promote(wipSegment);
+
+        FileUtils.fsyncDirectory(this.dataDir);
 
         synchronized (this.manifestLock) {
-            Manifest.append(dataFileName, manifestFile());
+            Manifest.append(segment.getDataFile().getName(), manifestFile());
             this.version.updateAndGet(current -> {
                 List<Segment<K>> newList = new ArrayList<>(current.segments());
                 newList.add(segment);

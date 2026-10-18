@@ -1,9 +1,14 @@
 package manifest;
 
+import core.FileUtils;
+
 import java.io.*;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
@@ -50,6 +55,10 @@ public class Manifest {
             out.getFD().sync();
         }
         Files.move(tmpFile.toPath(), manifestFile.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        File parent = manifestFile.getParentFile();
+        if (parent != null) {
+            FileUtils.fsyncDirectory(parent.toPath());
+        }
     }
 
 }
