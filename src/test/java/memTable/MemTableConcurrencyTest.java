@@ -1,6 +1,7 @@
 package memTable;
 
 import core.Value;
+import core.key.KeyCodecImpl.IntegerKeyCodec;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -22,7 +23,7 @@ public class MemTableConcurrencyTest {
     @Test
     @DisplayName("Concurrent writers to the SAME key never overcount size -- final size matches whichever value actually survived")
     void concurrentWritesToSameKeyNeverOvercountSize() throws InterruptedException {
-        MemTable<Integer> table = new MemTable<>(Integer.MAX_VALUE);
+        MemTable<Integer> table = new MemTable<>(Integer.MAX_VALUE, new IntegerKeyCodec());
         int threadCount = 8;
         CountDownLatch start = new CountDownLatch(1);
         Thread[] threads = new Thread[threadCount];
@@ -47,14 +48,16 @@ public class MemTableConcurrencyTest {
         for (Thread th : threads) th.join();
 
         Value finalValue = table.get(1);
-        assertEquals(finalValue.getSizeInBytes(), table.getSizeInBytes(),
-                "sizeInBytes must equal exactly the surviving value's own size, not a sum across every racing writer");
+        int expected = finalValue.getSizeInBytes() + new IntegerKeyCodec().encodedSize(1);
+        assertEquals(expected, table.getSizeInBytes(),
+                "sizeInBytes must equal exactly the surviving value's own size plus the one key's, "
+                        + "not a sum across every racing writer");
     }
 
     @Test
     @DisplayName("Concurrent writers to DISTINCT keys sum their sizes exactly, with no lost updates")
     void concurrentWritesToDistinctKeysSizeSumsCorrectly() throws InterruptedException {
-        MemTable<Integer> table = new MemTable<>(Integer.MAX_VALUE);
+        MemTable<Integer> table = new MemTable<>(Integer.MAX_VALUE, new IntegerKeyCodec());
         int threadCount = 32;
         CountDownLatch start = new CountDownLatch(1);
         Thread[] threads = new Thread[threadCount];
@@ -82,29 +85,29 @@ public class MemTableConcurrencyTest {
         for (int t = 0; t < threadCount; t++) {
             Value stored = table.get(t);
             assertNotNull(stored, "key " + t + " should have been written by its thread");
-            expectedTotal += stored.getSizeInBytes();
+            expectedTotal += stored.getSizeInBytes() + new IntegerKeyCodec().encodedSize(t);
         }
 
         assertEquals(expectedTotal, table.getSizeInBytes(),
-                "sizeInBytes must equal the exact sum of every distinct key's stored value size -- "
-                        + "a lost update on the counter itself would undercount this");
+                "sizeInBytes must equal the exact sum of every distinct key's stored value size plus "
+                        + "its key's -- a lost update on the counter itself would undercount this");
     }
 
     @Test
     @DisplayName("A single put() of a brand-new key never throws, and size reflects exactly that value")
     void freshKeyInsertDoesNotThrowAndSizeMatchesExactly() {
-        MemTable<Integer> table = new MemTable<>(Integer.MAX_VALUE);
+        MemTable<Integer> table = new MemTable<>(Integer.MAX_VALUE, new IntegerKeyCodec());
         Value value = Value.of(new byte[10]);
 
         assertDoesNotThrow(() -> table.put(1, value));
-        assertEquals(value.getSizeInBytes(), table.getSizeInBytes(),
-                "a fresh memTable's size after one insert should equal exactly that value's size");
+        assertEquals(value.getSizeInBytes() + new IntegerKeyCodec().encodedSize(1), table.getSizeInBytes(),
+                "a fresh memTable's size after one insert should equal exactly that value's size plus its key's");
     }
 
     @Test
     @DisplayName("Repeated concurrent stress: interleaved same-key and distinct-key writers never drift or throw")
     void mixedConcurrentStressNeverDriftsOrThrows() throws InterruptedException {
-        MemTable<Integer> table = new MemTable<>(Integer.MAX_VALUE);
+        MemTable<Integer> table = new MemTable<>(Integer.MAX_VALUE, new IntegerKeyCodec());
         int keySpace = 20;
         int threadCount = 16;
         int putsPerThread = 500;
@@ -138,9 +141,10 @@ public class MemTableConcurrencyTest {
         int expectedTotal = 0;
         for (int k = 0; k < keySpace; k++) {
             Value stored = table.get(k);
-            if (stored != null) expectedTotal += stored.getSizeInBytes();
+            if (stored != null) expectedTotal += stored.getSizeInBytes() + new IntegerKeyCodec().encodedSize(k);
         }
         assertEquals(expectedTotal, table.getSizeInBytes(),
-                "after all writers finish, sizeInBytes must equal the sum of every key's final stored value size");
+                "after all writers finish, sizeInBytes must equal the sum of every key's final stored "
+                        + "value size plus its key's");
     }
 }

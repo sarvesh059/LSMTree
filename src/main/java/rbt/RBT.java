@@ -233,8 +233,27 @@ public class RBT<K extends Comparable<K>,V> {
         return node;
     }
 
-    //Note: Not used in application, just implemented it out of curiosity
-    public void delete(K key){
+    /**
+     * Removes {@code key}, rebalancing as a left-leaning red-black tree requires.
+     *
+     * <p>Kept as a reference implementation and exercised by {@code RBTTest}, but <b>not used by the
+     * engine</b>: {@code MemTable.delete} writes a tombstone through {@code put} instead, because an
+     * LSM-tree must record a deletion rather than erase it.
+     *
+     * @deprecated Do not call this from engine code. It mutates nodes <em>in place</em> inside
+     *     {@link java.util.concurrent.atomic.AtomicReference#updateAndGet}'s function -- see
+     *     {@code current.makeNodeRed()} below -- which breaks that method's contract twice over. The
+     *     function must be side-effect-free because it may be re-applied on CAS contention, and
+     *     {@code current} is the root every concurrent reader is holding, so a colour change is
+     *     visible to a reader mid-traversal. {@code insert} does not have this problem. Fixing it
+     *     means making the delete path copy nodes the way the insert path does.
+     *
+     *     <p>Package-private rather than public so that engine code -- all of which lives outside
+     *     this package -- cannot reach it at all; the deprecation then only warns the callers that
+     *     remain possible, which is {@code RBTTest} and any future code inside {@code rbt}.
+     */
+    @Deprecated
+    void delete(K key){
 
         this.root.updateAndGet((current) -> {
             if(current == null || !searchNode(key).getKey().equals(key)) return current;

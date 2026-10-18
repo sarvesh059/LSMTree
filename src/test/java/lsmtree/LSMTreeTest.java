@@ -35,9 +35,9 @@ import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.*;
 
 public class LSMTreeTest {
-    // Each value below is a single-byte payload: size = 1 (flag) + 8 (id) + 4 (length) + 1 (payload) = 14 bytes.
-    // threshold=50 means 3 puts (42 bytes) stay under it, and the 4th put (56 bytes) crosses it.
-    private static final int THRESHOLD = 50;
+    // Each entry below costs 4 (encoded key) + 1 (flag) + 8 (id) + 4 (value length) + 1 (payload) = 18 bytes.
+    // threshold=70 means 3 puts (54 bytes) stay under it, and the 4th put (72 bytes) crosses it.
+    private static final int THRESHOLD = 70;
     private static final int SAMPLE_EVERY = 5;
 
     private Path dataDir;
@@ -92,7 +92,7 @@ public class LSMTreeTest {
         lsmTree.put(3, singleByteValue(3));
         assertEquals(0, lsmTree.segmentCount(), "should not have flushed yet, still under threshold");
 
-        lsmTree.put(4, singleByteValue(4)); // 24 bytes >= 20, crosses the threshold
+        lsmTree.put(4, singleByteValue(4)); // 72 bytes >= 70, crosses the threshold
 
         assertEquals(1, lsmTree.segmentCount(), "crossing the threshold should trigger exactly one flush");
     }

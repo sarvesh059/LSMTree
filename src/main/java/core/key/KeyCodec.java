@@ -11,4 +11,8 @@ public interface KeyCodec<K> {
     byte[] readRawEncoded(DataInput in) throws IOException;
     K decodeKey(byte[] encodedKey);
     byte[] encodeKey(K key);
+
+    default int encodedSize(K key) {
+        return encodeKey(key).length;
+    }
 }

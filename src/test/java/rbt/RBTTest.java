@@ -10,6 +10,7 @@ import java.util.*;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+@SuppressWarnings("deprecation") // RBT.delete is deliberately deprecated; these are its only callers
 public class RBTTest {
 
     RBT<Integer, String> tree;

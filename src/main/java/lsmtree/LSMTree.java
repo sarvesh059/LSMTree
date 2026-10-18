@@ -58,7 +58,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         this.indexSampleRate = indexSampleRate;
         this.wal = new WAL<>(this.codec, dataDir.resolve(FileConstants.WAL_FILE_NAME).toFile());
         this.ssTable = new SSTable<>(codec);
-        this.version = new AtomicReference<>(new Version<K>(new MemTable<>(memTableThreshold), new ArrayList<>()));
+        this.version = new AtomicReference<>(new Version<K>(new MemTable<>(memTableThreshold, codec), new ArrayList<>()));
         this.eventCounter = new AtomicLong(0);
 
         this.cleanUpService = new CleanUpService<>(dataDir, this.version, this.manifestLock, this::oldestOpenPinAgeInMillis);
@@ -66,7 +66,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         this.compactionService = new CompactionService<>(dataDir, indexSampleRate, compactionStrategy, mergeStrategy,
                 this.version, this.manifestLock, this.cleanUpService);
         this.recoveryService = new RecoveryService<K>(dataDir, this.ssTable, this.wal, memTableThreshold,
-                this.version, this.manifestLock);
+                this.version, this.manifestLock, codec);
 
         try {
             long maxEventId = this.recoveryService.recover();
@@ -114,7 +114,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
             this.version.updateAndGet(current -> {
                 List<Segment<K>> newList = new ArrayList<>(current.segments());
                 newList.add(segment);
-                return new Version<>(new MemTable<>(this.memTableThreshold), newList);
+                return new Version<>(new MemTable<>(this.memTableThreshold, this.codec), newList);
             });
         }
 

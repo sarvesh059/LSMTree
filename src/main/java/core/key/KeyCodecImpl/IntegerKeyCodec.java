@@ -39,6 +39,11 @@ public class IntegerKeyCodec implements KeyCodec<Integer> {
     }
 
     @Override
+    public int encodedSize(Integer key) {
+        return 4;
+    }
+
+    @Override
     public byte[] encodeKey(Integer key) {
         int xor = key ^ Integer.MIN_VALUE;
         return ByteBuffer.allocate(4).putInt(xor).array();

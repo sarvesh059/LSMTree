@@ -30,7 +30,7 @@ public class WALTest {
     void replayIntoFreshMemTableReproducesExactState() throws IOException {
         fillWALRecords();
 
-        MemTable<Integer> memTable = new MemTable<>(1000);
+        MemTable<Integer> memTable = new MemTable<>(1000, new IntegerKeyCodec());
         try (WAL<Integer> wal = new WAL<>(new IntegerKeyCodec(), walFile)) {
             ReplayResult result = wal.replay(memTable);
             assertEquals(WALReplayStopReason.CLEAN_EOF ,result.stopReason(), "Replay with no error should have a clean EOF as replay stop reason.");
@@ -51,7 +51,7 @@ public class WALTest {
             // no appends
         }
 
-        MemTable<Integer> memTable = new MemTable<>(1000);
+        MemTable<Integer> memTable = new MemTable<>(1000, new IntegerKeyCodec());
         try (WAL<Integer> wal = new WAL<>(new IntegerKeyCodec(), walFile)) {
             wal.replay(memTable);
         }
@@ -67,7 +67,7 @@ public class WALTest {
             raf.setLength(100);
         }
 
-        MemTable<Integer> memTable = new MemTable<>(1000);
+        MemTable<Integer> memTable = new MemTable<>(1000, new IntegerKeyCodec());
         try (WAL<Integer> wal = new WAL<>(new IntegerKeyCodec(), walFile)) {
             ReplayResult result = assertDoesNotThrow(() -> wal.replay(memTable));
             assertEquals(WALReplayStopReason.TRUNCATED, result.stopReason());
@@ -102,7 +102,7 @@ public class WALTest {
         }
 
         try (WAL<Integer> reopened = new WAL<>(new IntegerKeyCodec(), walFile)) {
-            MemTable<Integer> memTable = new MemTable<>(1000);
+            MemTable<Integer> memTable = new MemTable<>(1000, new IntegerKeyCodec());
             reopened.replay(memTable);
 
             assertEquals(Value.of("a".getBytes(StandardCharsets.UTF_8)), memTable.get(1));
@@ -112,7 +112,7 @@ public class WALTest {
     @Test
     void walFailureLeavesMemTableUntouched() throws IOException{
         WAL<Integer> wal = new WAL<>(codec, walFile);
-        MemTable<Integer> memTable = new MemTable<>(1000);
+        MemTable<Integer> memTable = new MemTable<>(1000, new IntegerKeyCodec());
         wal.close();
         
         assertThrows(IOException.class, () -> {
@@ -130,7 +130,7 @@ public class WALTest {
         Value v2 = Value.of("v2".getBytes(StandardCharsets.UTF_8));
         Value v3 = Value.of("v3".getBytes(StandardCharsets.UTF_8));
         try(WAL<Integer> wal = new WAL<>(codec, walFile)){
-            MemTable<Integer> memTable = new MemTable<>(1000);
+            MemTable<Integer> memTable = new MemTable<>(1000, new IntegerKeyCodec());
 
             wal.append(1, v1); wal.fsync(); memTable.put(1, v1);
             wal.append(2, v2); wal.fsync(); memTable.put(2, v2);
@@ -144,7 +144,7 @@ public class WALTest {
 
         }
 
-        MemTable<Integer> recovered = new MemTable<>(1000);
+        MemTable<Integer> recovered = new MemTable<>(1000, new IntegerKeyCodec());
         try(WAL<Integer> wal = new WAL<>(codec, walFile)){
             wal.replay(recovered);
 
@@ -165,7 +165,7 @@ public class WALTest {
             raf.writeInt(1 << 28);
         }
 
-        MemTable<Integer> memTable = new MemTable<>(1000);
+        MemTable<Integer> memTable = new MemTable<>(1000, new IntegerKeyCodec());
         try (WAL<Integer> wal = new WAL<>(new IntegerKeyCodec(), walFile)) {
             ReplayResult result = assertDoesNotThrow(() -> wal.replay(memTable));
             assertEquals(WALReplayStopReason.TRUNCATED, result.stopReason());
@@ -191,7 +191,7 @@ public class WALTest {
             raf.writeInt(0);
         }
 
-        MemTable<Integer> memTable = new MemTable<>(1000);
+        MemTable<Integer> memTable = new MemTable<>(1000, new IntegerKeyCodec());
         try (WAL<Integer> wal = new WAL<>(new IntegerKeyCodec(), walFile)) {
             ReplayResult result = assertDoesNotThrow(() -> wal.replay(memTable));
             assertEquals(WALReplayStopReason.INVALID_LENGTH, result.stopReason());
@@ -217,7 +217,7 @@ public class WALTest {
             raf.write(new byte[33]);
         }
 
-        MemTable<Integer> memTable = new MemTable<>(1000);
+        MemTable<Integer> memTable = new MemTable<>(1000, new IntegerKeyCodec());
         try (WAL<Integer> wal = new WAL<>(new IntegerKeyCodec(), walFile)) {
             ReplayResult result = assertDoesNotThrow(() -> wal.replay(memTable));
             assertEquals(WALReplayStopReason.BAD_MAGIC, result.stopReason());
@@ -244,7 +244,7 @@ public class WALTest {
             raf.write(0);
         }
 
-        MemTable<Integer> memTable = new MemTable<>(1000);
+        MemTable<Integer> memTable = new MemTable<>(1000, new IntegerKeyCodec());
         try (WAL<Integer> wal = new WAL<>(new IntegerKeyCodec(), walFile)) {
             ReplayResult result = assertDoesNotThrow(() -> wal.replay(memTable));
             assertEquals(WALReplayStopReason.CHECKSUM_MISMATCH, result.stopReason());
@@ -270,7 +270,7 @@ public class WALTest {
             wal.append(2, Value.of(20, new byte[]{2}));   // fresh instance: latestEventId starts at -1, so tag 20
         }
 
-        MemTable<Integer> memTable = new MemTable<>(1000);
+        MemTable<Integer> memTable = new MemTable<>(1000, new IntegerKeyCodec());
         try (WAL<Integer> wal = new WAL<>(new IntegerKeyCodec(), walFile)) {
             ReplayResult result = assertDoesNotThrow(() -> wal.replay(memTable));
             assertEquals(WALReplayStopReason.STALE_RECORD, result.stopReason(),
@@ -306,7 +306,7 @@ public class WALTest {
             raf.setLength(100);
         }
 
-        MemTable<Integer> memTable = new MemTable<>(1000);
+        MemTable<Integer> memTable = new MemTable<>(1000, new IntegerKeyCodec());
         try (WAL<Integer> wal = new WAL<>(new IntegerKeyCodec(), walFile)) {
             ReplayResult result = wal.replay(memTable);
             assertEquals(WALReplayStopReason.TRUNCATED, result.stopReason());

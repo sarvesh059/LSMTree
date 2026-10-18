@@ -2,6 +2,7 @@ package memTable;
 
 import rbt.Entry;
 import core.Value;
+import core.key.KeyCodecImpl.IntegerKeyCodec;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -16,7 +17,7 @@ public class MemTableTest {
 
     @BeforeEach
     void setUp(){
-        memTable = new MemTable<>(100);
+        memTable = new MemTable<>(100, new IntegerKeyCodec());
     }
 
     @Test
@@ -185,7 +186,7 @@ public class MemTableTest {
 
     @Test
     void isFullTripsOnceThresholdIsCrossed(){
-        MemTable<Integer> smallTable = new MemTable<>(5);
+        MemTable<Integer> smallTable = new MemTable<>(5, new IntegerKeyCodec());
         assertFalse(smallTable.isFull(), "a fresh memTable should not be full");
 
         smallTable.put(1, Value.of("test".getBytes(StandardCharsets.UTF_8)));

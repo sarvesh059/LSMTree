@@ -10,6 +10,7 @@ import constants.FileConstants;
 import core.DataFileMetaData;
 import core.IndexEntry;
 import core.Segment;
+import core.key.KeyCodec;
 import manifest.Manifest;
 import memTable.MemTable;
 
@@ -28,18 +29,20 @@ public class RecoveryService<K extends Comparable<K>> {
     private final SSTable<K> ssTable;
     private final WAL<K> wal;
     private final int memTableThreshold;
+    private final KeyCodec<K> keyCodec;
     private final AtomicReference<Version<K>> version;
     private final Object manifestLock;
     private static final System.Logger LOG = System.getLogger(RecoveryService.class.getName());
 
     public RecoveryService(Path dataDir, SSTable<K> ssTable, WAL<K> wal, int memTableThreshold,
-                            AtomicReference<Version<K>> version, Object manifestLock) {
+                            AtomicReference<Version<K>> version, Object manifestLock, KeyCodec<K> keyCodec) {
         this.dataDir = dataDir;
         this.ssTable = ssTable;
         this.wal = wal;
         this.memTableThreshold = memTableThreshold;
         this.version = version;
         this.manifestLock = manifestLock;
+        this.keyCodec = keyCodec;
     }
 
     public long recover() throws IOException {
@@ -103,7 +106,7 @@ public class RecoveryService<K extends Comparable<K>> {
             }
         }
 
-        MemTable<K> newMemTable = new MemTable<>(this.memTableThreshold);
+        MemTable<K> newMemTable = new MemTable<>(this.memTableThreshold, this.keyCodec);
         ReplayResult replayResult = this.wal.replay(newMemTable);
         if (replayResult.stopReason() != WALReplayStopReason.CLEAN_EOF) {
             LOG.log(replayResult.stopReason().logLevel(),
