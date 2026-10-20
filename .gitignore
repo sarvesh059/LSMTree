@@ -35,3 +35,6 @@ docs/task breakdown.md
 
 ### Maven ###
 target/
+
+# Per-task decision records (local working notes, not part of the repo)
+tmp/
