@@ -790,6 +790,66 @@ public class LSMTreeTest {
     }
 
     @Test
+    void aFailedManifestRecordRollsBackTheCompactionOnReopen() throws IOException {
+        Path dir = dataDir.resolve("rollback-on-failed-record");
+        KeyCodec<Integer> codec = new IntegerKeyCodec();
+        List<String> dataFileNamesBeforeCompaction;
+
+        try (LSMTree<Integer> firstSession = new LSMTree<>(codec, dir, SAMPLE_EVERY, THRESHOLD,
+                new FullCompactStrategy<>(1000), new FullLoadMergeStrategy<>(codec))) {
+
+            firstSession.put(1, singleByteValue(1));
+            firstSession.flush();
+            firstSession.put(2, singleByteValue(2));
+            firstSession.flush();
+
+            assertEquals(2, firstSession.segmentCount(), "two segments to compact");
+            dataFileNamesBeforeCompaction = dataFileNames(firstSession);
+
+            makeManifestRewritesFail(dir);
+
+            assertThrows(IOException.class,
+                    () -> firstSession.sharedCompactionLogic(firstSession.segments()));
+            assertEquals(1, firstSession.segmentCount(), "the install succeeded in memory");
+        }
+
+        allowManifestRewrites(dir);
+
+        try (LSMTree<Integer> secondSession = new LSMTree<>(codec, dir, SAMPLE_EVERY, THRESHOLD,
+                new FullCompactStrategy<>(1000), new FullLoadMergeStrategy<>(codec))) {
+
+            assertEquals(dataFileNamesBeforeCompaction, dataFileNames(secondSession),
+                    "reopen must restore the inputs, not the merged output");
+            assertArrayEquals(singleByte(1), secondSession.get(1));
+            assertArrayEquals(singleByte(2), secondSession.get(2));
+            assertEquals(List.of(), wipFileNames(dir), "the output files must be reclaimed");
+        }
+    }
+
+    private void makeManifestRewritesFail(Path dir) throws IOException {
+        Files.createDirectory(manifestRewriteTempPath(dir));
+    }
+
+    private void allowManifestRewrites(Path dir) throws IOException {
+        Files.delete(manifestRewriteTempPath(dir));
+    }
+
+    private Path manifestRewriteTempPath(Path dir) {
+        return dir.resolve(FileConstants.MANIFEST_FILE_NAME + ".tmp");
+    }
+
+    private List<String> dataFileNames(LSMTree<Integer> tree) {
+        return tree.segments().stream().map(segment -> segment.getDataFile().getName()).sorted().toList();
+    }
+
+    private List<String> wipFileNames(Path dir) throws IOException {
+        try (var files = Files.list(dir)) {
+            return files.map(Path::getFileName).map(Path::toString)
+                    .filter(name -> name.startsWith(FileConstants.WIP_FILE_PREFIX)).sorted().toList();
+        }
+    }
+
+    @Test
     void treeReopensWithNoOrphanManifestEntryAfterAnAbandonedCompaction() throws IOException {
         Path dir = dataDir.resolve("reopen-after-abandon");
         KeyCodec<Integer> codec = new IntegerKeyCodec();
@@ -815,8 +875,15 @@ public class LSMTreeTest {
         }
 
         List<String> manifestEntries = Manifest.readAll(dir.resolve(FileConstants.MANIFEST_FILE_NAME).toFile());
-        assertTrue(manifestEntries.stream().noneMatch(entry -> entry.startsWith(FileConstants.WIP_FILE_PREFIX)),
-                () -> "the abandoned compaction's WIP- entry must be gone: " + manifestEntries);
+        List<String> orphanWipEntries = manifestEntries.stream()
+                .filter(entry -> entry.startsWith(FileConstants.WIP_FILE_PREFIX))
+                .map(entry -> entry.substring(FileConstants.WIP_FILE_PREFIX.length()))
+                .filter(underlyingName -> !manifestEntries.contains(underlyingName))
+                .toList();
+        assertTrue(orphanWipEntries.isEmpty(),
+                () -> "every WIP- entry must have a matching live entry, or the abandoned "
+                        + "compaction leaked one; orphans: " + orphanWipEntries
+                        + " in " + manifestEntries);
 
         try (LSMTree<Integer> secondSession = new LSMTree<>(codec, dir, SAMPLE_EVERY, THRESHOLD,
                 new FullCompactStrategy<>(1000), new FullLoadMergeStrategy<>(codec))) {

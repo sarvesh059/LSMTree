@@ -81,4 +81,29 @@ public class SegmentTest {
         Segment<Integer> newSegment = new Segment<>(dataFile, indexFile, bloomFilterFile, new ArrayList<IndexEntry>(), bloomFilter, 0, -1);
         assertTrue(newSegment.keyDefinitelyNotInSegment(codec.encodeKey(100), codec), "keyDefinitelyNotInSegment should return true when provided key is null");
     }
+
+    @Test
+    void aSegmentMarkedDeletedCanStillBePinned(){
+        assertTrue(segment.pin(), "precondition: a live segment must pin");
+        segment.unpin();
+
+        segment.markDeleted();
+
+        assertTrue(segment.pin(),
+                "a segment marked deleted must still pin: a scan() holds an older Version and must keep "
+                        + "reading segments that have since been retired, so pin() answers 'is this file "
+                        + "safe to read', never 'is this segment current'");
+        segment.unpin();
+    }
+
+    @Test
+    void aSegmentClaimedForDeletionCanNoLongerBePinned(){
+        segment.markDeleted();
+
+        assertTrue(segment.tryClaimForDeletion(), "precondition: an unpinned marked segment must claim");
+
+        assertFalse(segment.pin(),
+                "once claimed for deletion the files are being unlinked, so pin() must refuse; this is "
+                        + "the only state in which it does");
+    }
 }

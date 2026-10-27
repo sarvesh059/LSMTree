@@ -14,8 +14,8 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
@@ -65,7 +65,6 @@ public class CompactionService<K extends Comparable<K>> {
     }
 
     void sharedCompactionLogic(List<Segment<K>> selectedSegments, List<Segment<K>> segmentsSnapshot) throws IOException {
-        File manifestFile = manifestFile();
         Supplier<SegmentFiles> fileFactory = () -> {
             try {
                 return this.segmentFileFactory.create();
@@ -96,22 +95,24 @@ public class CompactionService<K extends Comparable<K>> {
         FileUtils.fsyncDirectory(this.dataDir);
 
         selectedSegments.forEach(Segment::unpin);
-        if(!tryReplaceSegments(selectedSegments, newSegments)){
-            newSegments.forEach(Segment::markDeleted);
-            cleanUpService.cleanUp(newSegments);
-            return;
+
+
+        // Install before recording, not the reverse: tryReplaceSegments can fail validation, and
+        // recording first would then leave the manifest asserting a change memory never made.
+        // A crash in the gap only rolls the compaction back.
+        synchronized (this.manifestLock) {
+            if(!tryReplaceSegments(selectedSegments, newSegments)){
+                newSegments.forEach(Segment::markDeleted);
+                cleanUpService.cleanUp(newSegments);
+                return;
+            }
+            Set<String> manifestEntries = new LinkedHashSet<>(Manifest.readAll(manifestFile()));
+            manifestEntries.addAll(newDataFileNames);
+            manifestEntries.addAll(selectedSegments.stream().map(kSegment -> FileConstants.DELETED_FILE_PREFIX + kSegment.getDataFile().getName()).toList());
+            Manifest.rewrite(new ArrayList<>(manifestEntries), manifestFile());
         }
 
         selectedSegments.forEach(Segment::markDeleted);
-
-        synchronized (this.manifestLock) {
-            for (String dataFileName : newDataFileNames) {
-                Manifest.append(dataFileName, manifestFile);
-            }
-            for (Segment<K> segment : selectedSegments) {
-                Manifest.append(FileConstants.DELETED_FILE_PREFIX + segment.getDataFile().getName(), manifestFile);
-            }
-        }
 
         cleanUpService.cleanUp(selectedSegments);
     }

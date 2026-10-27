@@ -114,6 +114,24 @@ public class Segment<K> {
         return this.refCount.get();
     }
 
+    /**
+     * Marks this segment retired. One-way and irreversible.
+     *
+     * <p>Call this only once the segment is known to have left the current {@code Version} —
+     * never speculatively, and never before a compaction's install is confirmed. The position of
+     * this call relative to the install is load-bearing: {@code MergeStrategy} implementations
+     * read {@link #isDeleted()} to decide which other segments are still live, and that list
+     * drives tombstone retention. Marking a segment that is still live removes it from that list,
+     * which can drop a tombstone whose suppression that segment's older data still needs —
+     * resurrecting a deleted key, silently and permanently.
+     *
+     * <p>{@code CleanUpService} validates that its arguments have been marked and throws
+     * otherwise, so forgetting the call fails loudly; calling it <em>too early</em> does not.
+     *
+     * <p>Note this does <em>not</em> prevent {@link #pin()}: a {@code scan()} holds an older
+     * {@code Version} and must keep reading segments that have since been retired. Only
+     * {@link #tryClaimForDeletion()} succeeding makes a segment unpinnable.
+     */
     public void markDeleted(){
         this.isDeleted = true;
     }
