@@ -3,33 +3,27 @@ package service;
 import constants.FileConstants;
 import core.Segment;
 import core.SegmentFiles;
-import manifest.Manifest;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.Optional;
 import java.util.UUID;
 
 public final class SegmentFileFactory {
     private final Path dataDir;
-    private final Object manifestLock;
 
-    public SegmentFileFactory(Path dataDir, Object manifestLock) {
+    public SegmentFileFactory(Path dataDir) {
         this.dataDir = dataDir;
-        this.manifestLock = manifestLock;
     }
 
-    public SegmentFiles create() throws IOException {
+    public SegmentFiles create() {
         String uuid = UUID.randomUUID().toString();
         String wipDataFileName = FileConstants.WIP_FILE_PREFIX + FileConstants.DATA_FILE_PREFIX + uuid;
         String indexFileName = FileConstants.INDEX_FILE_PREFIX + uuid;
         String bloomFilterFileName = FileConstants.BLOOM_FILTER_FILE_PREFIX + uuid;
-
-        synchronized (this.manifestLock) {
-            Manifest.append(wipDataFileName, manifestFile());
-        }
 
         return new SegmentFiles(
                 this.dataDir.resolve(wipDataFileName).toFile(),
@@ -53,7 +47,29 @@ public final class SegmentFileFactory {
         return finalSegment;
     }
 
-    private File manifestFile() {
-        return this.dataDir.resolve(FileConstants.MANIFEST_FILE_NAME).toFile();
+    public static Optional<String> parse(String fileName){
+        if(fileName.startsWith(FileConstants.WIP_FILE_PREFIX+FileConstants.DATA_FILE_PREFIX)){
+            fileName = fileName.substring(FileConstants.WIP_FILE_PREFIX.length());
+        }
+
+        String[] prefixes = {
+                FileConstants.DATA_FILE_PREFIX,
+                FileConstants.INDEX_FILE_PREFIX,
+                FileConstants.BLOOM_FILTER_FILE_PREFIX
+        };
+
+        for (String prefix : prefixes) {
+            if (fileName.startsWith(prefix)) {
+                try {
+                    UUID uuid = UUID.fromString(fileName.substring(prefix.length()));
+                    if(uuid.toString().equals(fileName.substring(prefix.length()))) return Optional.of(FileConstants.DATA_FILE_PREFIX+uuid);
+                    return Optional.empty();
+                } catch (IllegalArgumentException e) {
+                    return Optional.empty();
+                }
+            }
+        }
+
+        return Optional.empty();
     }
 }

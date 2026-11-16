@@ -62,7 +62,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         this.eventCounter = new AtomicLong(0);
 
         this.cleanUpService = new CleanUpService<>(dataDir, this.manifestLock, this::oldestOpenPinAgeInMillis);
-        this.segmentFileFactory = new SegmentFileFactory(dataDir, this.manifestLock);
+        this.segmentFileFactory = new SegmentFileFactory(dataDir);
         this.compactionService = new CompactionService<>(dataDir, indexSampleRate, compactionStrategy, mergeStrategy,
                 this.version, this.manifestLock, this.cleanUpService);
         this.recoveryService = new RecoveryService<K>(dataDir, this.ssTable, this.wal, memTableThreshold,

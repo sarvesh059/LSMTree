@@ -48,7 +48,7 @@ public class CompactionService<K extends Comparable<K>> {
         this.version = version;
         this.manifestLock = manifestLock;
         this.cleanUpService = cleanUpService;
-        this.segmentFileFactory = new SegmentFileFactory(dataDir, manifestLock);
+        this.segmentFileFactory = new SegmentFileFactory(dataDir);
     }
 
     public void checkAndCompactAsync() {
@@ -65,13 +65,7 @@ public class CompactionService<K extends Comparable<K>> {
     }
 
     void sharedCompactionLogic(List<Segment<K>> selectedSegments, List<Segment<K>> segmentsSnapshot) throws IOException {
-        Supplier<SegmentFiles> fileFactory = () -> {
-            try {
-                return this.segmentFileFactory.create();
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
-        };
+        Supplier<SegmentFiles> fileFactory = this.segmentFileFactory::create;
 
         List<Segment<K>> pinnedSegments = new ArrayList<>();
         for(Segment<K> segment: selectedSegments){

@@ -13,7 +13,6 @@ import core.Value;
 import core.key.KeyCodec;
 import core.key.KeyCodecImpl.IntegerKeyCodec;
 import cursor.EntrySource;
-import manifest.Manifest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -811,6 +810,10 @@ public class LSMTreeTest {
             assertThrows(IOException.class,
                     () -> firstSession.sharedCompactionLogic(firstSession.segments()));
             assertEquals(1, firstSession.segmentCount(), "the install succeeded in memory");
+
+            assertTrue(firstSession.segments().getFirst().getDataFile().exists(),
+                    "the output is live in memory, so failed-write cleanup must not delete it: "
+                            + "the failure came after the commit point");
         }
 
         allowManifestRewrites(dir);
@@ -823,6 +826,8 @@ public class LSMTreeTest {
             assertArrayEquals(singleByte(1), secondSession.get(1));
             assertArrayEquals(singleByte(2), secondSession.get(2));
             assertEquals(List.of(), wipFileNames(dir), "the output files must be reclaimed");
+            assertEquals(dataFileNamesBeforeCompaction, Arrays.stream(dataFiles(dir)).map(File::getName).sorted().toList(),
+                    "the promoted output must be reclaimed, leaving only the inputs' data files");
         }
     }
 
@@ -873,17 +878,6 @@ public class LSMTreeTest {
             firstSession.sharedCompactionLogic(staleSelection);
             assertEquals(1, firstSession.segmentCount(), "sanity: the stale install was rejected");
         }
-
-        List<String> manifestEntries = Manifest.readAll(dir.resolve(FileConstants.MANIFEST_FILE_NAME).toFile());
-        List<String> orphanWipEntries = manifestEntries.stream()
-                .filter(entry -> entry.startsWith(FileConstants.WIP_FILE_PREFIX))
-                .map(entry -> entry.substring(FileConstants.WIP_FILE_PREFIX.length()))
-                .filter(underlyingName -> !manifestEntries.contains(underlyingName))
-                .toList();
-        assertTrue(orphanWipEntries.isEmpty(),
-                () -> "every WIP- entry must have a matching live entry, or the abandoned "
-                        + "compaction leaked one; orphans: " + orphanWipEntries
-                        + " in " + manifestEntries);
 
         try (LSMTree<Integer> secondSession = new LSMTree<>(codec, dir, SAMPLE_EVERY, THRESHOLD,
                 new FullCompactStrategy<>(1000), new FullLoadMergeStrategy<>(codec))) {

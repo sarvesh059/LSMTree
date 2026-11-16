@@ -3,7 +3,6 @@ package service;
 import bloomFilter.BloomFilter;
 import constants.FileConstants;
 import core.Segment;
-import core.SegmentFiles;
 import manifest.Manifest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -29,24 +28,20 @@ public class CleanUpServiceTest {
     File manifestFile;
 
     @BeforeEach
-    void setUp(@TempDir Path dir){
+    void setUp(@TempDir Path dir) throws IOException {
         this.dir = dir;
         manifestLock = new Object();
-        segmentFileFactory = new SegmentFileFactory(dir, manifestLock);
+        segmentFileFactory = new SegmentFileFactory(dir);
         manifestFile = dir.resolve(FileConstants.MANIFEST_FILE_NAME).toFile();
+        Manifest.initialiseManifestFile(manifestFile);
     }
 
     @Test
     void cleanUpThatUnlinksNothingLeavesManifestUnchanged() throws IOException {
-        SegmentFiles inFlightSegment = this.segmentFileFactory.create();
-        String inFlightName = inFlightSegment.dataFile().getName();
-
         String unknownLiveName = FileConstants.DATA_FILE_PREFIX + UUID.randomUUID();
         Manifest.append(unknownLiveName, this.manifestFile);
 
         List<String> before = Manifest.readAll(this.manifestFile);
-        assertTrue(before.contains(inFlightName),
-                () -> "precondition: create() must have recorded the in-flight segment: " + before);
         assertTrue(before.contains(unknownLiveName),
                 () -> "precondition: the seeded live entry must have been recorded: " + before);
 
@@ -102,6 +97,28 @@ public class CleanUpServiceTest {
         assertEquals(List.of(marked.getDataFile().getName(), unmarked.getDataFile().getName()),
                 Manifest.readAll(this.manifestFile),
                 "a refused cleanUp must not touch the manifest");
+    }
+
+    @Test
+    void failedUnlinkKeepsTheDeletedEntryAndStillAttemptsEveryFile() throws IOException {
+        Segment<Integer> segment = segmentOnDisk();
+        segment.markDeleted();
+        String deletedEntry = FileConstants.DELETED_FILE_PREFIX + segment.getDataFile().getName();
+        Manifest.append(deletedEntry, this.manifestFile);
+
+        Path index = segment.getIndexFile().toPath();
+        Files.delete(index);
+        Files.createDirectories(index.resolve("blocker"));
+
+        CleanUpService<Integer> cleanUpService =
+                new CleanUpService<>(this.dir, this.manifestLock, () -> 1L);
+        cleanUpService.cleanUp(List.of(segment));
+
+        assertFalse(segment.getDataFile().exists(), "the data file must be deleted");
+        assertFalse(segment.getBloomFilterFile().exists(),
+                "every file must be attempted, not only those before the one that failed");
+        assertTrue(Manifest.readAll(this.manifestFile).contains(deletedEntry),
+                "the DELETED- entry must stay until every file is gone, so the scan at open can finish the job");
     }
 
     private Segment<Integer> segmentOnDisk() throws IOException {

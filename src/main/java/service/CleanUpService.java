@@ -81,7 +81,6 @@ public class CleanUpService<K extends Comparable<K>> {
             Set<String> manifestEntries = new LinkedHashSet<>(Manifest.readAll(manifestFile()));
             for (String fileName : deletedEntries) {
                 manifestEntries.remove(fileName);
-                manifestEntries.remove(FileConstants.WIP_FILE_PREFIX+fileName);
                 manifestEntries.remove(FileConstants.DELETED_FILE_PREFIX+fileName);
             }
             Manifest.rewrite(new ArrayList<>(manifestEntries), manifestFile());
