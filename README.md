@@ -52,9 +52,7 @@ src/main/java/
   manifest/       manifest log (which segment files are live)
   LSMTree/        top-level orchestration: put/get/scan/flush/compact/recover
 
-src/test/java/     JUnit 5 tests mirroring the package layout, plus the *Benchmark
-                   harnesses (kept here so they compile on every build and retain
-                   package-private access; Surefire excludes them from `mvn test`)
+src/test/java/     JUnit 5 tests mirroring the package layout
 bench/kvbench/     comparative harness: this engine vs LevelDB and RocksDB, same
                    workload, same machine (see "Benchmarking" below)
 docs/benchmark.md  historical measurements for the performance claims above
@@ -70,14 +68,6 @@ mvn test            # compile and run the test suite
 mvn -q package      # build the jar
 ```
 
-The `*Benchmark` classes live in `src/test/java` so they are compiled by every build but are
-excluded from `mvn test`. Run one directly against the test classpath:
-
-```bash
-mvn -q test-compile
-java -cp target/classes:target/test-classes lsmtree.CompactionAmplificationBenchmark
-```
-
 ## Benchmarks
 
 Every performance claim in this README — bloom filter effect, compaction strategy trade-offs,
@@ -87,6 +77,10 @@ methodology, caveats, and a few honest write-ups of results that didn't match th
 hypothesis until investigated further (e.g. leveled compaction's read-amplification advantage
 over size-tiered doesn't show up until the dataset is large enough to populate more than one or
 two levels — confirmed, not assumed).
+
+The in-process harnesses that produced those numbers are not part of this repository or its
+build, so the figures in `docs/benchmark.md` are a historical record rather than something a
+clone can reproduce directly. The comparative harness below is in the repository and runs as is.
 
 ## Benchmarking against LevelDB and RocksDB
 

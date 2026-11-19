@@ -1,5 +1,20 @@
 # Benchmark — current state (post T6.2)
 
+> **Where the harnesses are now (2026-11-19).** This document is a historical log, and the paths
+> and commands below are the ones in use when each section was measured. The harnesses started in
+> `bench/LSMTree/`, moved to `src/test/java/LSMTree/` when the project migrated to Maven, and the
+> package was later renamed to `lsmtree`. As of 2026-11-19 they are **no longer in the repository
+> or its build**: they are kept outside version control and repaired when next run. The last
+> committed versions are in `81899bf` under `src/test/java/lsmtree/*Benchmark.java`
+> (`git show 81899bf:src/test/java/lsmtree/YcsbStyleBenchmark.java`). They are still in package
+> `lsmtree` and use package-private methods, so compile and run them against the main classes:
+>
+> ```
+> mvn -q compile
+> javac -cp target/classes -d bench-out <path-to>/*Benchmark.java
+> java -cp target/classes:bench-out lsmtree.YcsbStyleBenchmark
+> ```
+
 Ad-hoc wall-clock benchmarks against the codebase as of T6.2 (streaming compaction) being
 complete. Not JMH — a single-process, single-run harness using `System.nanoTime()`, run via
 the same `javac`/`java` workflow used throughout development. Numbers are real, measured on

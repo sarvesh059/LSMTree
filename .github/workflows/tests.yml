@@ -26,5 +26,5 @@ jobs:
           cache: maven
 
       # verify rather than test: it also runs package, which README documents.
-      # Benchmarks are excluded by the Surefire config, so they cannot run here.
+      # Benchmark harnesses are not in the repository, so nothing here builds or runs them.
       - run: mvn -B --no-transfer-progress verify

@@ -83,20 +83,6 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>${maven-surefire-plugin.version}</version>
-                <configuration>
-                    <!--
-                      The benchmark harnesses live in src/test/java so that (a) they compile on
-                      every build - they have broken silently three times when nothing compiled
-                      them - and (b) they keep package-private access to flush()/segments()/
-                      sharedCompactionLogic(). They are not tests and must never run as part of
-                      `mvn test`. Surefire's default includes would already skip *Benchmark, but
-                      stating it makes the intent explicit rather than incidental to a naming
-                      convention someone could later break.
-                    -->
-                    <excludes>
-                        <exclude>**/*Benchmark.java</exclude>
-                    </excludes>
-                </configuration>
             </plugin>
         </plugins>
     </build>
