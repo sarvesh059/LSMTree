@@ -2,8 +2,10 @@ package core;
 
 import java.io.IOException;
 import java.nio.channels.FileChannel;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.List;
 import java.util.Locale;
 
 public final class FileUtils {
@@ -25,6 +27,25 @@ public final class FileUtils {
             if (DIRECTORY_FSYNC_SUPPORTED) {
                 throw e;
             }
+        }
+    }
+
+    public static void cleanUpFiles(List<Path> files) throws IOException{
+        IOException exception = null;
+        for (Path filePath : files) {
+            try {
+                Files.deleteIfExists(filePath);
+            } catch (IOException e) {
+                if (exception == null) {
+                    exception = e;
+                } else {
+                    exception.addSuppressed(e);
+                }
+            }
+        }
+
+        if (exception != null) {
+            throw exception;
         }
     }
 }

@@ -1,5 +1,6 @@
 package service;
 
+import core.FileUtils;
 import lsmtree.Version;
 import sstable.SSTable;
 import wal.WAL;
@@ -56,14 +57,12 @@ public class RecoveryService<K extends Comparable<K>> {
         long maxEventId = 0;
         List<Segment<K>> segments = new ArrayList<>(currentVersion.segments());
 
-        LinkedHashSet<String> liveDataFiles = new LinkedHashSet<>();
-        LinkedHashSet<String> pendingDeletionDataFiles = new LinkedHashSet<>();
         Map<String, List<String>> filesGrouping = scanDirectory();
         boolean manifestFileExists = manifestFile.exists();
         if(!manifestFileExists && !filesGrouping.isEmpty()) throw new IOException("Manifest file ("+manifestFile.getAbsolutePath()+") does not exist while "+filesGrouping.size()+" segments are present.");
 
         Manifest.initialiseManifestFile(manifestFile);
-        sortManifestEntries(manifestFile, liveDataFiles, pendingDeletionDataFiles);
+        LinkedHashSet<String> liveDataFiles = new LinkedHashSet<>(Manifest.readAll(manifestFile));
 
 
         for (String dataFileName : liveDataFiles) {
@@ -110,19 +109,9 @@ public class RecoveryService<K extends Comparable<K>> {
         }
         this.version.updateAndGet((_) -> new Version<K>(newMemTable, segments));
 
-        List<String> undeletedEntries = new ArrayList<>();
-        for (String dataFileName : pendingDeletionDataFiles) {
-            try {
-                deleteSegmentFiles(dataFileName);
-            } catch (IOException e) {
-                LOG.log(System.Logger.Level.WARNING, "failed to delete segment " + dataFileName
-                        + " recorded as deleted; keeping its entry for the next open: " + e.getMessage());
-                undeletedEntries.add(FileConstants.DELETED_FILE_PREFIX + dataFileName);
-            }
-        }
 
         for (String dataFileName : filesGrouping.keySet()) {
-            if (liveDataFiles.contains(dataFileName) || pendingDeletionDataFiles.contains(dataFileName)) continue;
+            if (liveDataFiles.contains(dataFileName)) continue;
             try {
                 deleteSegmentFiles(dataFileName);
             } catch (IOException e) {
@@ -133,7 +122,7 @@ public class RecoveryService<K extends Comparable<K>> {
 
         try {
             synchronized (this.manifestLock) {
-                Manifest.rewrite(Stream.concat(liveDataFiles.stream(), undeletedEntries.stream()).toList(), manifestFile);
+                Manifest.rewrite(liveDataFiles.stream().toList(), manifestFile);
             }
         } catch (IOException e) {
             LOG.log(System.Logger.Level.WARNING, "could not compact the manifest at " + manifestFile
@@ -143,49 +132,15 @@ public class RecoveryService<K extends Comparable<K>> {
         return Math.max(maxEventId, this.wal.getLatestEventId());
     }
 
-    private void sortManifestEntries(
-            File manifestFile,
-            LinkedHashSet<String> liveDataFiles,
-            LinkedHashSet<String> pendingDeletionDataFiles) throws IOException {
-
-        List<String> dataFilesNames = Manifest.readAll(manifestFile);
-        for (String fileName : dataFilesNames) {
-            if (fileName.startsWith(FileConstants.DELETED_FILE_PREFIX)) {
-                String underlyingName = fileName.substring(FileConstants.DELETED_FILE_PREFIX.length());
-                liveDataFiles.remove(underlyingName);
-                pendingDeletionDataFiles.add(underlyingName);
-            } else {
-                liveDataFiles.add(fileName);
-                pendingDeletionDataFiles.remove(fileName);
-            }
-        }
-    }
-
     private void deleteSegmentFiles(String dataFileName) throws IOException {
         String suffix = dataFileName.substring(FileConstants.DATA_FILE_PREFIX.length());
 
-        IOException exception = null;
-
-        for (String fileName : List.of(
-                FileConstants.WIP_FILE_PREFIX + dataFileName,
+        List<Path> files = Stream.of(
                 dataFileName,
                 FileConstants.INDEX_FILE_PREFIX + suffix,
                 FileConstants.BLOOM_FILTER_FILE_PREFIX + suffix
-        )) {
-            try {
-                Files.deleteIfExists(this.dataDir.resolve(fileName));
-            } catch (IOException e) {
-                if (exception == null) {
-                    exception = e;
-                } else {
-                    exception.addSuppressed(e);
-                }
-            }
-        }
-
-        if (exception != null) {
-            throw exception;
-        }
+        ).map(this.dataDir::resolve).toList();
+        FileUtils.cleanUpFiles(files);
     }
 
     private Map<String, List<String>> scanDirectory() throws IOException {

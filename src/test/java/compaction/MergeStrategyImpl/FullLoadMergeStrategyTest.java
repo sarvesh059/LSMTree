@@ -37,12 +37,12 @@ public class FullLoadMergeStrategyTest {
         directory = dir;
         fileFactory = () -> {
             String uuid = UUID.randomUUID().toString();
-            String wipDataFileName = FileConstants.WIP_FILE_PREFIX + FileConstants.DATA_FILE_PREFIX + uuid;
+            String dataFileName = FileConstants.DATA_FILE_PREFIX + uuid;
             String indexFileName = FileConstants.INDEX_FILE_PREFIX + uuid;
             String bloomFilterFileName = FileConstants.BLOOM_FILTER_FILE_PREFIX + uuid;
 
             return new SegmentFiles(
-                    this.directory.resolve(wipDataFileName).toFile(),
+                    this.directory.resolve(dataFileName).toFile(),
                     this.directory.resolve(indexFileName).toFile(),
                     this.directory.resolve(bloomFilterFileName).toFile()
             );

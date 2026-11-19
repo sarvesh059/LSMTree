@@ -4,8 +4,8 @@ import bloomFilter.BloomFilter;
 import core.key.KeyCodec;
 
 import java.io.File;
-import java.nio.file.Files;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -17,10 +17,10 @@ public class Segment<K> {
     private final BloomFilter bloomFilter;
     private final int entryCount;
     private final long maxEventId;
+    private final AtomicInteger refCount;
     private int level;
     private byte[] minKey;
     private byte[] maxKey;
-    private final AtomicInteger refCount;
     private volatile boolean isDeleted;
 
 
@@ -49,20 +49,19 @@ public class Segment<K> {
     }
 
     public void deleteFiles() throws IOException {
-        Files.deleteIfExists(dataFile.toPath());
-        Files.deleteIfExists(indexFile.toPath());
-        Files.deleteIfExists(bloomFilterFile.toPath());
+        List<Path> files = List.of(this.getDataFile().toPath(), this.getIndexFile().toPath(), this.getBloomFilterFile().toPath());
+        FileUtils.cleanUpFiles(files);
     }
 
     public List<IndexEntry> getLoadedIndex() {
         return loadedIndex;
     }
 
-    public BloomFilter getBloomFilter(){
+    public BloomFilter getBloomFilter() {
         return this.bloomFilter;
     }
 
-    public int getEntryCount(){
+    public int getEntryCount() {
         return this.entryCount;
     }
 
@@ -90,11 +89,11 @@ public class Segment<K> {
         this.maxKey = maxKey;
     }
 
-    public long getMaxEventId(){
+    public long getMaxEventId() {
         return this.maxEventId;
     }
 
-    public long getSize(){
+    public long getSize() {
         return this.dataFile.length();
     }
 
@@ -103,14 +102,14 @@ public class Segment<K> {
         return result >= 0;
     }
 
-    public void unpin(){
+    public void unpin() {
         refCount.updateAndGet(current -> {
             if (current <= 0) throw new IllegalStateException("Segment needs to be pinned before unpinning.");
             return current - 1;
         });
     }
 
-    public int getRefCount(){
+    public int getRefCount() {
         return this.refCount.get();
     }
 
@@ -129,24 +128,39 @@ public class Segment<K> {
      * otherwise, so forgetting the call fails loudly; calling it <em>too early</em> does not.
      *
      * <p>Note this does <em>not</em> prevent {@link #pin()}: a {@code scan()} holds an older
-     * {@code Version} and must keep reading segments that have since been retired. Only
-     * {@link #tryClaimForDeletion()} succeeding makes a segment unpinnable.
+     * {@code Version} and must keep reading segments that have since been retired. Only a
+     * successful {@link #tryClaimForDeletion()} makes a segment unpinnable.
      */
-    public void markDeleted(){
+    public void markDeleted() {
         this.isDeleted = true;
     }
 
-    public boolean isDeleted(){
+    public boolean isDeleted() {
         return this.isDeleted;
     }
 
-    public boolean tryClaimForDeletion(){
-        if(!isDeleted) throw new IllegalStateException("Segment hasn't been marked for deletion");
-        return this.refCount.compareAndSet(0,-1);
+    /**
+     * Makes this retired segment unpinnable so its files can be deleted, or confirms that it
+     * already is.
+     *
+     * <p>Succeeds only when no {@code scan()} holds a pin. From then on {@link #pin()} refuses for
+     * good, so no new reader can start on files that are being, or have been, unlinked. A segment
+     * stays claimed after a failed delete, and a repeat call returns {@code true}, so the deleter
+     * can retry later without making the segment pinnable in between. Concurrent callers may both
+     * succeed; that is safe because deleting a file that is already gone is a no-op.
+     *
+     * @return {@code true} if the segment is unpinnable and its files may be deleted;
+     *         {@code false} if a reader still holds it
+     * @throws IllegalStateException if the segment has not been {@linkplain #markDeleted() marked}
+     */
+    public boolean tryClaimForDeletion() {
+        if (!isDeleted) throw new IllegalStateException("Segment hasn't been marked for deletion");
+        if(this.refCount.get() == -1) return true;
+        return this.refCount.compareAndSet(0, -1);
     }
 
-    public boolean keyDefinitelyNotInSegment(byte[] encodedKey, KeyCodec<K> codec){
-        if(encodedKey == null || this.getMinKey() == null || this.getMaxKey() == null) return true;
+    public boolean keyDefinitelyNotInSegment(byte[] encodedKey, KeyCodec<K> codec) {
+        if (encodedKey == null || this.getMinKey() == null || this.getMaxKey() == null) return true;
         return codec.compareEncoded(encodedKey, this.getMinKey()) < 0 ||
                 codec.compareEncoded(encodedKey, this.getMaxKey()) > 0 ||
                 !this.getBloomFilter().mightContain(encodedKey);

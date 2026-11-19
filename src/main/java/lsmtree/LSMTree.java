@@ -61,7 +61,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         this.version = new AtomicReference<>(new Version<K>(new MemTable<>(memTableThreshold, codec), new ArrayList<>()));
         this.eventCounter = new AtomicLong(0);
 
-        this.cleanUpService = new CleanUpService<>(dataDir, this.manifestLock, this::oldestOpenPinAgeInMillis);
+        this.cleanUpService = new CleanUpService<>(this::oldestOpenPinAgeInMillis);
         this.segmentFileFactory = new SegmentFileFactory(dataDir);
         this.compactionService = new CompactionService<>(dataDir, indexSampleRate, compactionStrategy, mergeStrategy,
                 this.version, this.manifestLock, this.cleanUpService);
@@ -98,14 +98,19 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
                 .max(Comparator.comparing(Entry::getKey))
                 .orElseThrow()
                 .getKey();
-        SegmentFiles segmentFiles = this.segmentFileFactory.create();
 
-        Segment<K> wipSegment = this.ssTable.write(memTableEntries, segmentFiles.dataFile(),
-                segmentFiles.indexFile(), segmentFiles.bloomFilterFile(), this.indexSampleRate, 0);
-        wipSegment.setMinKey(this.codec.encodeKey(minKey));
-        wipSegment.setMaxKey(this.codec.encodeKey(maxKey));
+        SegmentFiles segmentFiles = null;
+        Segment<K> wipSegment = null;
 
-        Segment<K> segment = this.segmentFileFactory.promote(wipSegment);
+        try(ManagedFileSupplier fileFactory = new ManagedFileSupplier(segmentFileFactory::create)){
+            segmentFiles = fileFactory.get();
+            wipSegment = this.ssTable.write(memTableEntries, segmentFiles.dataFile(),
+                    segmentFiles.indexFile(), segmentFiles.bloomFilterFile(), this.indexSampleRate, 0);
+            wipSegment.setMinKey(this.codec.encodeKey(minKey));
+            wipSegment.setMaxKey(this.codec.encodeKey(maxKey));
+            fileFactory.commit();
+        }
+        Segment<K> segment = wipSegment;
 
         FileUtils.fsyncDirectory(this.dataDir);
 
@@ -117,7 +122,6 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
                 return new Version<>(new MemTable<>(this.memTableThreshold, this.codec), newList);
             });
         }
-
         this.wal.reset();
 
         this.compactionService.checkAndCompactAsync();

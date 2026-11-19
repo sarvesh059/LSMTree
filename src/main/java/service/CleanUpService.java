@@ -2,36 +2,25 @@ package service;
 
 import constants.FileConstants;
 import core.Segment;
-import manifest.Manifest;
 
-import java.io.File;
 import java.io.IOException;
-import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
 public class CleanUpService<K extends Comparable<K>> {
-    private final Path dataDir;
-    private final Object manifestLock;
     private final Supplier<Long> stalePinAgeSupplier;
     private final Set<Segment<K>> pendingDeletionSet;
     private static final System.Logger LOG = System.getLogger(CleanUpService.class.getName());
 
-    public CleanUpService(Path dataDir, Object manifestLock,
-                          Supplier<Long> stalePinAgeSupplier) {
-        this.dataDir = dataDir;
-        this.manifestLock = manifestLock;
+    public CleanUpService(Supplier<Long> stalePinAgeSupplier) {
         this.stalePinAgeSupplier = stalePinAgeSupplier;
         this.pendingDeletionSet = ConcurrentHashMap.newKeySet();
     }
 
     /**
-     * Unlinks the files of every segment queued for deletion that is no longer pinned, and drops
-     * the corresponding manifest entries.
+     * Unlinks the files of every segment queued for deletion that is no longer pinned.
      *
      * <p>Callers mark their own segments via {@link Segment#markDeleted()} before calling this,
      * and must do so only once the segment has left the current {@code Version}. This method
@@ -45,9 +34,12 @@ public class CleanUpService<K extends Comparable<K>> {
      * whose unlink fails, stays queued and is attempted again on the next call. An empty list
      * therefore means "drain the queue".
      *
-     * <p>A name leaves the manifest only after its files are gone: the rewrite derives from the
-     * previous manifest contents and removes only the names unlinked in this pass, so entries this
-     * service knows nothing about are carried forward rather than erased.
+     * <p>Pass only segments the manifest does not name: inputs retired by a committed
+     * compaction, or outputs abandoned before they were recorded. Deleting the files of a segment
+     * the manifest still lists makes the next open refuse, because a listed segment must have all
+     * of its files. Because such segments are unlisted, nothing is lost if an unlink keeps failing
+     * or the process dies first: the scan at the next open deletes every segment file the manifest
+     * does not name.
      *
      * @throws IllegalStateException if any segment passed in has not been marked deleted
      */
@@ -62,28 +54,16 @@ public class CleanUpService<K extends Comparable<K>> {
         }
         pendingDeletionSet.addAll(segments);
 
-        List<String> deletedEntries = new ArrayList<>();
         for (Segment<K> segment : pendingDeletionSet) {
             if (segment.tryClaimForDeletion()) {
                 try {
                     segment.deleteFiles();
-                    deletedEntries.add(segment.getDataFile().getName());
                     pendingDeletionSet.remove(segment);
                 } catch (IOException e) {
-                    LOG.log(System.Logger.Level.WARNING,"failed to physically delete segment file "
-                            + segment.getDataFile().getName() + ": " + e.getMessage());
+                    LOG.log(System.Logger.Level.WARNING,"could not delete every file of retired segment "
+                            + segment.getDataFile().getName() + ": it stays queued and is retried on the next clean-up pass (the next open's scan reclaims it otherwise)",e);
                 }
             }
-        }
-
-
-        synchronized (this.manifestLock) {
-            Set<String> manifestEntries = new LinkedHashSet<>(Manifest.readAll(manifestFile()));
-            for (String fileName : deletedEntries) {
-                manifestEntries.remove(fileName);
-                manifestEntries.remove(FileConstants.DELETED_FILE_PREFIX+fileName);
-            }
-            Manifest.rewrite(new ArrayList<>(manifestEntries), manifestFile());
         }
 
         long oldestPinAge = stalePinAgeSupplier.get();
@@ -91,9 +71,5 @@ public class CleanUpService<K extends Comparable<K>> {
             LOG.log(System.Logger.Level.INFO,"a scan() snapshot has been held open for " + oldestPinAge
                     + "ms, delaying physical segment-file deletion for whatever it's still referencing");
         }
-    }
-
-    private File manifestFile() {
-        return this.dataDir.resolve(FileConstants.MANIFEST_FILE_NAME).toFile();
     }
 }

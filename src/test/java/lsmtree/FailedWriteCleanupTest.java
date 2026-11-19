@@ -4,6 +4,7 @@ import compaction.CompactStrategyImpl.FullCompactStrategy;
 import compaction.MergeStrategy;
 import compaction.MergeStrategyImpl.FullLoadMergeStrategy;
 import constants.FileConstants;
+import core.Segment;
 import core.SegmentFiles;
 import core.key.KeyCodec;
 import core.key.KeyCodecImpl.IntegerKeyCodec;
@@ -18,6 +19,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -68,7 +70,6 @@ public class FailedWriteCleanupTest {
         try(var files = Files.list(dir)){
             return files.map(path -> path.getFileName().toString())
                     .filter(name -> name.startsWith(FileConstants.DATA_FILE_PREFIX)
-                            || name.startsWith(FileConstants.WIP_FILE_PREFIX)
                             || name.startsWith(FileConstants.INDEX_FILE_PREFIX)
                             || name.startsWith(FileConstants.BLOOM_FILTER_FILE_PREFIX))
                     .sorted()
@@ -115,7 +116,7 @@ public class FailedWriteCleanupTest {
             }
             doCallRealMethod().when(codec).encodeKey(any());
 
-            assertEquals(List.of(), segmentFileNames(), "sex failed flushes must leave no files, not six partial triples");
+            assertEquals(List.of(), segmentFileNames(), "six failed flushes must leave no files, not six partial triples");
             tree.flush();
             assertEquals(1, tree.segmentCount(), "once the fault clears, the next flush succeeds");
             for(int i=1;i <=9;i++) assertArrayEquals(value(i), tree.get(i), "key "+i);
@@ -145,7 +146,7 @@ public class FailedWriteCleanupTest {
                         .filter(name -> name.startsWith(FileConstants.DATA_FILE_PREFIX) && !name.equals(liveName))
                         .toList();
 
-                assertEquals(1, orphanedNames.size(), () -> "the promoted output must stay on disk past the commit point: "+ onDisk);
+                assertEquals(1, orphanedNames.size(), () -> "the output must stay on disk past the commit point: "+ onDisk);
             } finally {
                 manifest.setWritable(true);
             }
@@ -160,15 +161,15 @@ public class FailedWriteCleanupTest {
     }
 
     @Test
-    void failedCompactionLeavesNoOutputFiles() throws IOException{
+    void failedCompactionLeavesNoOutputFiles() throws IOException {
         List<Path> createdOutputs = new ArrayList<>();
         @SuppressWarnings("unchecked")
         MergeStrategy<Integer> failingMerge = mock(MergeStrategy.class);
         when(failingMerge.merge(any(), any(), any(), anyInt())).thenAnswer(invocation -> {
             Supplier<SegmentFiles> outputs = invocation.getArgument(2);
-            for(int output=0; output < 2; output++){
+            for (int output = 0; output < 2; output++) {
                 SegmentFiles files = outputs.get();
-                for(File file : List.of(files.dataFile(), files.indexFile(), files.bloomFilterFile())){
+                for (File file : List.of(files.dataFile(), files.indexFile(), files.bloomFilterFile())) {
                     Files.createFile(file.toPath());
                     createdOutputs.add(file.toPath());
                 }
@@ -176,7 +177,7 @@ public class FailedWriteCleanupTest {
             throw new IOException("injected: merge failed after creating two outputs");
         });
 
-        try(LSMTree<Integer> tree = new LSMTree<>(new IntegerKeyCodec(), dir, SAMPLE_EVERY, NEVER_FLUSHES, new FullCompactStrategy<>(1000), failingMerge)){
+        try (LSMTree<Integer> tree = new LSMTree<>(new IntegerKeyCodec(), dir, SAMPLE_EVERY, NEVER_FLUSHES, new FullCompactStrategy<>(1000), failingMerge)) {
             tree.put(1, value(1));
             tree.flush();
             tree.put(2, value(2));
@@ -184,13 +185,71 @@ public class FailedWriteCleanupTest {
 
             assertThrows(IOException.class, () -> tree.sharedCompactionLogic(tree.segments()));
             assertEquals(6, createdOutputs.size(), "precondition: the merge created two outputs before failing");
-            for(Path output: createdOutputs){
-                assertFalse(Files.exists(output), () -> "a failed compaction must remove its outputs: "+ output.getFileName());
+            for (Path output : createdOutputs) {
+                assertFalse(Files.exists(output), () -> "a failed compaction must remove its outputs: " + output.getFileName());
             }
 
             assertEquals(2, tree.segmentCount(), "the inputs stay live");
             assertArrayEquals(value(1), tree.get(1));
             assertArrayEquals(value(2), tree.get(2));
+        }
+    }
+
+    @Test
+    void failedCompactionReleasesItsPinsSoALaterCompactionCanDeleteTheInputs() throws IOException{
+        IntegerKeyCodec codec = new IntegerKeyCodec();
+        FullLoadMergeStrategy<Integer> realMerge = new FullLoadMergeStrategy<>(codec);
+        AtomicBoolean failNextMerge = new AtomicBoolean(true);
+        MergeStrategy<Integer> failsOnce = (segments, snapshot, outputs, sampleEvery) -> {
+            if(failNextMerge.getAndSet(false)) throw new IOException("injected: the first merge fails");
+            return realMerge.merge(segments, snapshot, outputs, sampleEvery);
+        };
+
+        try(LSMTree<Integer> tree = new LSMTree<>(codec, dir, SAMPLE_EVERY, NEVER_FLUSHES, new FullCompactStrategy<>(1000), failsOnce)){
+            tree.put(1, value(1));
+            tree.flush();
+            tree.put(2, value(2));
+            tree.flush();
+            List<Segment<Integer>> inputs = tree.segments();
+
+            assertThrows(IOException.class, () -> tree.sharedCompactionLogic(inputs));
+            for(Segment<Integer> input : inputs){
+                assertEquals(0, input.getRefCount(), () -> "a failed compaction must release its pin on " + input.getDataFile().getName());
+            }
+
+            tree.sharedCompactionLogic(tree.segments());
+            assertEquals(1, tree.segmentCount(), "precondition: the retry merges both inputs into one segment");
+
+            for(Segment<Integer> input : inputs){
+                for(File file : List.of(input.getDataFile(), input.getIndexFile(), input.getBloomFilterFile())){
+                    assertFalse(file.exists(), () -> "a retired input must be deleted in-session, not held by a leaked pin: " + file.getName());
+                }
+            }
+            assertArrayEquals(value(1), tree.get(1));
+            assertArrayEquals(value(2), tree.get(2));
+        }
+    }
+
+    @Test
+    void failedCompactionRethrowsTheOriginalEvenWhenItsCleanupFails() throws IOException{
+        IOException injected = new IOException("injected: merge failed");
+        MergeStrategy<Integer> failingMerge = (segments, snapshot, outputs, sampleEvery) -> {
+            // An output whose data file is a non-empty directory: deleting it throws, so the cleanup fails too.
+            Files.createDirectories(outputs.get().dataFile().toPath().resolve("blocker"));
+            throw injected;
+        };
+
+        try(LSMTree<Integer> tree = new LSMTree<>(new IntegerKeyCodec(), dir, SAMPLE_EVERY, NEVER_FLUSHES, new FullCompactStrategy<>(1000), failingMerge)){
+            tree.put(1, value(1));
+            tree.flush();
+            tree.put(2, value(2));
+            tree.flush();
+
+            IOException thrown = assertThrows(IOException.class, () -> tree.sharedCompactionLogic(tree.segments()));
+
+            assertSame(injected, thrown, "cleanup must not replace or wrap the original failure");
+            assertEquals(1, thrown.getSuppressed().length, "the cleanup's own failure must be attached, not lost");
+            assertEquals(2, tree.segmentCount(), "the inputs stay live");
         }
     }
 }

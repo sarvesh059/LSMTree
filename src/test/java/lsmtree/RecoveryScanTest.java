@@ -73,10 +73,9 @@ public class RecoveryScanTest {
         }).when(codec).encodeKey(any());
     }
 
-    private List<Path> plantSegmentFiles(String uuid, boolean inFlight) throws IOException{
-        String dataPrefix = (inFlight ? FileConstants.WIP_FILE_PREFIX: "") + FileConstants.DATA_FILE_PREFIX;
+    private List<Path> plantSegmentFiles(String uuid) throws IOException{
         List<Path> files = List.of(
-                dir.resolve(dataPrefix+uuid),
+                dir.resolve(FileConstants.DATA_FILE_PREFIX + uuid),
                 dir.resolve(FileConstants.INDEX_FILE_PREFIX + uuid),
                 dir.resolve(FileConstants.BLOOM_FILTER_FILE_PREFIX + uuid)
         );
@@ -88,7 +87,6 @@ public class RecoveryScanTest {
         try(var files = Files.list(dir)){
             return files.map(path -> path.getFileName().toString())
                     .filter(name -> name.startsWith(FileConstants.DATA_FILE_PREFIX)
-                    || name.startsWith(FileConstants.WIP_FILE_PREFIX)
                     || name.startsWith(FileConstants.INDEX_FILE_PREFIX)
                     || name.startsWith(FileConstants.BLOOM_FILTER_FILE_PREFIX))
                     .sorted()
@@ -205,7 +203,7 @@ public class RecoveryScanTest {
     @Test
     void orphanSegmentFilesAreReclaimedOnOpen() throws IOException{
         List<Path> live = flushOneSegment(1);
-        List<Path> orphan = plantSegmentFiles(UUID.randomUUID().toString(), false);
+        List<Path> orphan = plantSegmentFiles(UUID.randomUUID().toString());
 
         try(LSMTree<Integer> tree = openTree()){
             assertArrayEquals(value(1), tree.get(1), "the live segment must still serve reads");
@@ -216,21 +214,9 @@ public class RecoveryScanTest {
     }
 
     @Test
-    void orphanInFlightSegmentFilesAreReclaimedOnOpen() throws IOException{
-        List<Path> live = flushOneSegment(1);
-        List<Path> orphan = plantSegmentFiles(UUID.randomUUID().toString(), true);
-        try(LSMTree<Integer> tree = openTree()){
-            assertArrayEquals(value(1), tree.get(1));
-        }
-
-        assertNoneExist(orphan, "a crash mid-write leaves exactly these files, and nothing names them");
-        assertAllExist(live, " the live segment's files must be untouched");
-    }
-
-    @Test
     void orphanSiblingFilesWithoutADataFileAreReclaimed() throws IOException{
         List<Path> live = flushOneSegment(1);
-        List<Path> orphan = plantSegmentFiles(UUID.randomUUID().toString(), false);
+        List<Path> orphan = plantSegmentFiles(UUID.randomUUID().toString());
         Files.delete(orphan.getFirst());
         List<Path> siblings = orphan.subList(1,3);
 
@@ -275,7 +261,7 @@ public class RecoveryScanTest {
     void refusedOpenDeletesNothing() throws IOException {
         List<Path> live = flushOneSegment(1);
         Files.delete(live.get(1));
-        List<Path> orphan = plantSegmentFiles(UUID.randomUUID().toString(), false);
+        List<Path> orphan = plantSegmentFiles(UUID.randomUUID().toString());
 
         assertThrows(IOException.class, this::openTree, "a live segment with a missing index file must refuse the open");
         assertAllExist(orphan, "a refused open must delete nothing: the scan runs after the live-set check");
@@ -285,7 +271,7 @@ public class RecoveryScanTest {
     @Test
     void readOnlyDirectoryWIthAnOrphanStillOpens() throws IOException{
         flushOneSegment(1);
-        List<Path> orphan = plantSegmentFiles(UUID.randomUUID().toString(), false);
+        List<Path> orphan = plantSegmentFiles(UUID.randomUUID().toString());
         assertTrue(dir.toFile().setWritable(false), "precondition: could not make the directory read-only");
 
         try{
@@ -301,23 +287,10 @@ public class RecoveryScanTest {
     }
 
     @Test
-    void deletedEntryWhoseFilesAreGoneIsDroppedFromTheManifest() throws IOException{
-        List<Path> live = flushOneSegment(1);
-        String liveName = live.getFirst().getFileName().toString();
-        Manifest.append(FileConstants.DELETED_FILE_PREFIX+FileConstants.DATA_FILE_PREFIX+UUID.randomUUID(), manifest().toFile());
-
-        try(LSMTree<Integer> tree = openTree()){
-            assertArrayEquals(value(1), tree.get(1));
-        }
-
-        assertEquals(List.of(liveName), Manifest.readAll(manifest().toFile()), "a DELETED- entry with no files left has nothing to track and must go");
-    }
-
-    @Test
-    void deletedEntryIsKeptUntilEveryFileIsGone() throws IOException{
+    void orphanWithABlockedFileStillHasEveryOtherFileReclaimed() throws IOException{
         flushOneSegment(1);
         String uuid = UUID.randomUUID().toString();
-        List<Path> filesOfB = plantSegmentFiles(uuid, false);
+        List<Path> filesOfB = plantSegmentFiles(uuid);
         Path dataOfB = filesOfB.get(0);
         Path indexOfB = filesOfB.get(1);
         Path bloomOfB = filesOfB.get(2);
@@ -325,34 +298,25 @@ public class RecoveryScanTest {
         // delete indexOfB file then recreate it as directory with blocker inside it
         // so deleteIfExists on indexOfB throws DirectoryNotEmptyException
         Files.delete(indexOfB);
-        Path blocker = Files.createDirectories(indexOfB.resolve("blocker"));
-        String deletedEntry = FileConstants.DELETED_FILE_PREFIX+ dataOfB.getFileName();
-        Manifest.append(deletedEntry, manifest().toFile());
+        Files.createDirectories(indexOfB.resolve("blocker"));
 
         try(LSMTree<Integer> tree = openTree()){
-            assertArrayEquals(value(1), tree.get(1), "a filed must not fail the open");
+            assertArrayEquals(value(1), tree.get(1), "a failed delete must not fail the open");
         }
         assertAll(
-                () -> assertTrue(Manifest.readAll(manifest().toFile()).contains(deletedEntry), "an entry whose files are not all gone must be carried forward"),
                 () -> assertFalse(Files.exists(dataOfB), "the data file must still be deleted"),
                 () -> assertFalse(Files.exists(bloomOfB), "every file must be attempted, not only those before the one that failed"),
                 () -> assertTrue(Files.exists(indexOfB), "sanity: the blocked file is still there")
         );
-        Files.delete(blocker);
-
-        try(LSMTree<Integer> tree = openTree()){
-            assertArrayEquals(value(1), tree.get(1));
-        }
-
-        assertFalse(Files.exists(indexOfB), "once unblocked, the next open finishes the job");
-        assertFalse(Manifest.readAll(manifest().toFile()).contains(deletedEntry), "with every file gone, the entry is dropped");
     }
 
     @Test
     void failedManifestRewritesStillOpens() throws IOException{
-        flushOneSegment(1);
-        Manifest.append(FileConstants.DELETED_FILE_PREFIX+FileConstants.DATA_FILE_PREFIX+UUID.randomUUID(), manifest().toFile());
+        String liveName = flushOneSegment(1).getFirst().getFileName().toString();
+        // A duplicate line makes the rewrite observable: a successful one would collapse it.
+        Manifest.append(liveName, manifest().toFile());
         List<String> before = Manifest.readAll(manifest().toFile());
+        assertEquals(List.of(liveName, liveName), before, "precondition: the live name must be listed twice");
 
         // Manifest.rewrite opens manifest.log.tmp first; a directory there makes it throw.
         Files.createDirectory(dir.resolve(FileConstants.MANIFEST_FILE_NAME+".tmp"));
@@ -365,28 +329,26 @@ public class RecoveryScanTest {
     }
 
     @Test
-    void crashDuringFlushLeavesOnlyLiveFilesAfterReopen() throws IOException{
+    void failedFlushKeepsItsKeysInTheWalAcrossAReopen() throws IOException{
         IntegerKeyCodec codec = spy(new IntegerKeyCodec());
         try(LSMTree<Integer> tree = openTree(codec)){
             for(int i=1;i<=3;i++) tree.put(i, value(i));
 
-            failSegmentWrite(codec, new UncheckedIOException(new IOException("injected: crash mid-write")));
+            failSegmentWrite(codec, new UncheckedIOException(new IOException("injected: write failure")));
             assertThrows(UncheckedIOException.class, tree::flush);
             doCallRealMethod().when(codec).encodeKey(any());
 
-            List<String> leftBehind = segmentFilesNames();
-            assertEquals(3, leftBehind.size(), () -> "precondition: the interrupted write must have left its three files: "+ leftBehind);
+            assertEquals(List.of(), segmentFilesNames(), "the failed flush must clean up its own files in-session");
         }
-        try(LSMTree<Integer> kTree = openTree()){
-            assertEquals(List.of(), segmentFilesNames(), "nothing from the interrupted flush may remain");
+        try(LSMTree<Integer> reopened = openTree()){
             for(int i=1;i<=3;i++){
-                assertArrayEquals(value(i), kTree.get(i), "the WAL was never reset, so key "+i+" must replay");
+                assertArrayEquals(value(i), reopened.get(i), "the flush never committed, so the WAL was not reset and key "+i+" must replay");
             }
         }
     }
 
     @ParameterizedTest(name = "leftover tmp = \"{0}\"")
-    @ValueSource(strings = {"", "manifest-start\n", "manifest-st", "dataFile-x;\nDELETED-dataFile-y;\n"})
+    @ValueSource(strings = {"", "manifest-start\n", "manifest-st", "dataFile-x;\ndataFile-y;\n"})
     void creationInterruptedBeforeItsRenameLeavesAStoreThatOpens(String leftover) throws IOException {
         Path leftoverTmp = dir.resolve(FileConstants.MANIFEST_FILE_NAME + ".tmp");
         Files.writeString(leftoverTmp, leftover, StandardCharsets.UTF_8);

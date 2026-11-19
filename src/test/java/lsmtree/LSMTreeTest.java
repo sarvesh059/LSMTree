@@ -825,9 +825,8 @@ public class LSMTreeTest {
                     "reopen must restore the inputs, not the merged output");
             assertArrayEquals(singleByte(1), secondSession.get(1));
             assertArrayEquals(singleByte(2), secondSession.get(2));
-            assertEquals(List.of(), wipFileNames(dir), "the output files must be reclaimed");
             assertEquals(dataFileNamesBeforeCompaction, Arrays.stream(dataFiles(dir)).map(File::getName).sorted().toList(),
-                    "the promoted output must be reclaimed, leaving only the inputs' data files");
+                    "the unrecorded output must be reclaimed, leaving only the inputs' data files");
         }
     }
 
@@ -845,13 +844,6 @@ public class LSMTreeTest {
 
     private List<String> dataFileNames(LSMTree<Integer> tree) {
         return tree.segments().stream().map(segment -> segment.getDataFile().getName()).sorted().toList();
-    }
-
-    private List<String> wipFileNames(Path dir) throws IOException {
-        try (var files = Files.list(dir)) {
-            return files.map(Path::getFileName).map(Path::toString)
-                    .filter(name -> name.startsWith(FileConstants.WIP_FILE_PREFIX)).sorted().toList();
-        }
     }
 
     @Test

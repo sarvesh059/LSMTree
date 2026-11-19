@@ -39,7 +39,6 @@ public class SegmentFileFactoryTest {
     @ParameterizedTest(name="{0}")
     @ValueSource(strings = {
             FileConstants.DATA_FILE_PREFIX+UUID_TEXT,
-            FileConstants.WIP_FILE_PREFIX+FileConstants.DATA_FILE_PREFIX+ UUID_TEXT,
             FileConstants.INDEX_FILE_PREFIX+UUID_TEXT,
             FileConstants.BLOOM_FILTER_FILE_PREFIX+UUID_TEXT
     })
@@ -57,10 +56,7 @@ public class SegmentFileFactoryTest {
             FileConstants.DATA_FILE_PREFIX+UUID_TEXT+".tmp",
             "notes.txt",
             FileConstants.MANIFEST_FILE_NAME,
-            "backup-"+FileConstants.DATA_FILE_PREFIX+UUID_TEXT,
-            FileConstants.WIP_FILE_PREFIX + FileConstants.INDEX_FILE_PREFIX + UUID_TEXT,
-            FileConstants.WIP_FILE_PREFIX + FileConstants.WIP_FILE_PREFIX + FileConstants.DATA_FILE_PREFIX + UUID_TEXT,
-            FileConstants.DELETED_FILE_PREFIX+FileConstants.DATA_FILE_PREFIX+UUID_TEXT
+            "backup-"+FileConstants.DATA_FILE_PREFIX+UUID_TEXT
     })
     void malformedOrForeignNamesAreRejected(String fileName){
         assertEquals(Optional.empty(), SegmentFileFactory.parse(fileName),

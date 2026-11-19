@@ -1,12 +1,12 @@
 package service;
 
+import core.ManagedFileSupplier;
 import lsmtree.Version;
 import compaction.CompactionStrategy;
 import compaction.MergeStrategy;
 import constants.FileConstants;
 import core.FileUtils;
 import core.Segment;
-import core.SegmentFiles;
 import manifest.Manifest;
 
 import java.io.File;
@@ -15,7 +15,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
@@ -24,7 +23,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Supplier;
 
 public class CompactionService<K extends Comparable<K>> {
     private final Path dataDir;
@@ -65,7 +63,6 @@ public class CompactionService<K extends Comparable<K>> {
     }
 
     void sharedCompactionLogic(List<Segment<K>> selectedSegments, List<Segment<K>> segmentsSnapshot) throws IOException {
-        Supplier<SegmentFiles> fileFactory = this.segmentFileFactory::create;
 
         List<Segment<K>> pinnedSegments = new ArrayList<>();
         for(Segment<K> segment: selectedSegments){
@@ -77,18 +74,14 @@ public class CompactionService<K extends Comparable<K>> {
             }
         }
 
-        List<Segment<K>> wipSegments = this.mergeStrategy.merge(selectedSegments, segmentsSnapshot, fileFactory, this.indexSampleRate);
         List<Segment<K>> newSegments = new ArrayList<>();
-        List<String> newDataFileNames = new ArrayList<>();
-        for (Segment<K> wipSegment : wipSegments) {
-            Segment<K> finalSegment = this.segmentFileFactory.promote(wipSegment);
-            newSegments.add(finalSegment);
-            newDataFileNames.add(finalSegment.getDataFile().getName());
+        try(ManagedFileSupplier fileFactory = new ManagedFileSupplier(segmentFileFactory::create)){
+            newSegments.addAll(this.mergeStrategy.merge(selectedSegments, segmentsSnapshot, fileFactory, this.indexSampleRate));
+            FileUtils.fsyncDirectory(this.dataDir);
+            fileFactory.commit();
+        }finally {
+            selectedSegments.forEach(Segment::unpin);
         }
-
-        FileUtils.fsyncDirectory(this.dataDir);
-
-        selectedSegments.forEach(Segment::unpin);
 
 
         // Install before recording, not the reverse: tryReplaceSegments can fail validation, and
@@ -100,10 +93,9 @@ public class CompactionService<K extends Comparable<K>> {
                 cleanUpService.cleanUp(newSegments);
                 return;
             }
-            Set<String> manifestEntries = new LinkedHashSet<>(Manifest.readAll(manifestFile()));
-            manifestEntries.addAll(newDataFileNames);
-            manifestEntries.addAll(selectedSegments.stream().map(kSegment -> FileConstants.DELETED_FILE_PREFIX + kSegment.getDataFile().getName()).toList());
-            Manifest.rewrite(new ArrayList<>(manifestEntries), manifestFile());
+            Version<K> currentVersion = this.version.get();
+            List<Segment<K>> currentVersionSegmentList = new ArrayList<>(currentVersion.segments());
+            Manifest.rewrite(currentVersionSegmentList.stream().map(kSegment -> kSegment.getDataFile().getName()).toList(),manifestFile());
         }
 
         selectedSegments.forEach(Segment::markDeleted);
@@ -151,19 +143,19 @@ public class CompactionService<K extends Comparable<K>> {
     }
 
     private boolean tryReplaceSegments(List<Segment<K>> supersededSegments, List<Segment<K>> newSegments){
-        Set<Segment<K>> selectedSegmentsSet = Collections.newSetFromMap(new IdentityHashMap<>());
-        selectedSegmentsSet.addAll(supersededSegments);
+        Set<Segment<K>> supersededSegmentsSet = Collections.newSetFromMap(new IdentityHashMap<>());
+        supersededSegmentsSet.addAll(supersededSegments);
         AtomicBoolean segmentListUnchanged = new AtomicBoolean(true);
         this.version.updateAndGet((currentVersion) -> {
-            List<Segment<K>> newSegmentList = new ArrayList<>(currentVersion.segments());
-            int initialSize = newSegmentList.size();
-            newSegmentList.removeAll(selectedSegmentsSet);
-            if(initialSize - selectedSegmentsSet.size() != newSegmentList.size()){
+            List<Segment<K>> currentVersionSegmentList = new ArrayList<>(currentVersion.segments());
+            int initialSize = currentVersionSegmentList.size();
+            currentVersionSegmentList.removeAll(supersededSegmentsSet);
+            if(initialSize - supersededSegmentsSet.size() != currentVersionSegmentList.size()){
                 segmentListUnchanged.set(false);
                 return currentVersion;
             }
-            newSegmentList.addAll(newSegments);
-            return new Version<>(currentVersion.memTable(), newSegmentList);
+            currentVersionSegmentList.addAll(newSegments);
+            return new Version<>(currentVersion.memTable(), currentVersionSegmentList);
         });
 
         return segmentListUnchanged.get();
