@@ -19,6 +19,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
@@ -98,9 +99,27 @@ public class RecoveryScanTest {
         return dir.resolve(FileConstants.MANIFEST_FILE_NAME);
     }
 
-    private void writeManifestLines(List<String> lines, boolean trailingNewLine) throws IOException{
-        String content = String.join("\n", lines) + (trailingNewLine ? "\n" : "");
-        Files.writeString(manifest(),  content, StandardCharsets.UTF_8);
+    private static int indexOf(byte[] haystack, byte[] needle, int from){
+        outer:
+        for(int i = from; i <= haystack.length - needle.length; i++){
+            for(int j = 0; j < needle.length; j++){
+                if(haystack[i + j] != needle[j]) continue outer;
+            }
+            return i;
+        }
+        return -1;
+    }
+
+    private void assertRefusedTwiceAndNothingDeleted(List<Path> segmentFiles, String damage) throws IOException{
+        byte[] damagedManifest = Files.readAllBytes(manifest());
+        for(int open = 1; open <= 2; open++){
+            final int attempt = open;
+            assertThrows(IOException.class, this::openTree, () -> damage + ": the open must be refused (open " + attempt + ")");
+            assertAll(
+                    () -> assertAllExist(segmentFiles, damage + ": a refused open must not delete any segment (open " + attempt + ")"),
+                    () -> assertArrayEquals(damagedManifest, Files.readAllBytes(manifest()), damage + ": a refused open must leave the manifest byte-identical, or the evidence is lost (open " + attempt + ")")
+            );
+        }
     }
 
     private static void assertAllExist(List<Path> paths, String message){
@@ -141,64 +160,6 @@ public class RecoveryScanTest {
         assertAllExist(segmentFiles, "an empty manifest beside segment files is untrustworthy, so nothing is reclaimed");
     }
 
-    @Test
-    void manifestDamagedMidFileRefusesToOpen() throws IOException{
-        List<Path> filesOfA;
-        List<Path> filesOfB;
-        String dataFileOfA;
-        try(LSMTree<Integer> tree = openTree()){
-            tree.put(1, value(1));
-            tree.flush();
-            filesOfA = filesOf(tree.segments().getFirst());
-            dataFileOfA = tree.segments().getFirst().getDataFile().getName();
-            tree.put(2, value(2));
-            tree.flush();
-            filesOfB = filesOf(tree.segments().getLast());
-        }
-
-        List<String> lines = new ArrayList<>(Files.readAllLines(manifest(), StandardCharsets.UTF_8));
-        int damaged = lines.indexOf(dataFileOfA+ ";");
-        assertTrue(damaged >=0 && damaged < lines.size() -1, () -> "precondition: A's live line must exist and not be the last line: "+lines);
-        lines.set(damaged, dataFileOfA);
-        writeManifestLines(lines, true);
-        byte[] damagedManifest = Files.readAllBytes(manifest());
-
-        for(int open = 1; open <= 2; open++){
-            final int attempt = open;
-            assertThrows(IOException.class, this::openTree, "Tree refuses to open for mid file damaged manifest file (open " + attempt + ")");
-            assertAll(
-                    () -> assertAllExist(filesOfA, "a refused open must not delete the damaged line's segment (open " + attempt + ")"),
-                    () -> assertAllExist(filesOfB, "a refused open must not delete an undamaged segment (open " + attempt + ")"),
-                    () -> assertArrayEquals(damagedManifest, Files.readAllBytes(manifest()), "a refused open must leave the manifest byte-identical, or the evidence is lost (open " + attempt + ")")
-            );
-        }
-    }
-
-    @Test
-    void tornFinalManifestLineStillAllowsTheScan() throws IOException{
-        List<Path> filesOfB;
-        String dataFileOfB;
-        try(LSMTree<Integer> tree = openTree()){
-            tree.put(1, value(1));
-            tree.flush();
-            tree.put(2, value(2));
-            tree.flush();
-            Segment<Integer> b = tree.segments().getLast();
-            filesOfB = filesOf(b);
-            dataFileOfB = b.getDataFile().getName();
-        }
-
-        List<String> lines = new ArrayList<>(Files.readAllLines(manifest(), StandardCharsets.UTF_8));
-        assertEquals(dataFileOfB + ";", lines.getLast(), "precondition: B's live line must be last");
-        lines.set(lines.size()-1, dataFileOfB);
-        writeManifestLines(lines, false);
-
-        try(LSMTree<Integer> tree = openTree()){
-            assertArrayEquals(value(1), tree.get(1), "A is intact and must load");
-            assertEquals(1, tree.segmentCount(), "only A is active");
-        }
-        assertNoneExist(filesOfB, "a torn final line is an uncommitted flush, so its files must be reclaimed");
-    }
 
     @Test
     void orphanSegmentFilesAreReclaimedOnOpen() throws IOException{
@@ -365,5 +326,86 @@ public class RecoveryScanTest {
         assertFalse(Files.exists(leftoverTmp), "the leftover must be replaced and renamed away, not left behind");
         assertEquals(1, Manifest.readAll(manifest().toFile()).size(),
                 "nothing from the leftover may reach the manifest; only the flush's entry");
+    }
+
+    @Test
+    void manifestDamagedMidFileRefusesToOpen() throws IOException{
+        List<Path> segmentFiles = new ArrayList<>();
+        String dataFileOfA;
+        String dataFileOfB;
+        try(LSMTree<Integer> tree = openTree()){
+            tree.put(1, value(1));
+            tree.flush();
+            dataFileOfA = tree.segments().getFirst().getDataFile().getName();
+            tree.put(2, value(2));
+            tree.flush();
+            dataFileOfB = tree.segments().getLast().getDataFile().getName();
+            tree.segments().forEach(segment -> segmentFiles.addAll(filesOf(segment)));
+        }
+
+        byte[] bytes = Files.readAllBytes(manifest());
+        int nameOfA = indexOf(bytes, dataFileOfA.getBytes(StandardCharsets.UTF_8), 0);
+        int nameOfB = indexOf(bytes, dataFileOfB.getBytes(StandardCharsets.UTF_8), 0);
+        assertTrue(nameOfA >= 0 && nameOfB > nameOfA, "precondition: A's record must exist and be followed by B's");
+
+        bytes[nameOfA + dataFileOfA.length() / 2] ^= 0x01;
+        Files.write(manifest(), bytes);
+
+        assertRefusedTwiceAndNothingDeleted(segmentFiles, "a bit flip in A's name with B's valid record after it");
+    }
+
+    @Test
+    void tornFinalManifestRecordRefusesToOpen() throws IOException{
+        List<Path> segmentFiles = new ArrayList<>();
+        byte[] beforeB;
+        byte[] afterB;
+        try(LSMTree<Integer> tree = openTree()){
+            tree.put(1, value(1));
+            tree.flush();
+            beforeB = Files.readAllBytes(manifest());
+            tree.put(2, value(2));
+            tree.flush();
+            afterB = Files.readAllBytes(manifest());
+            tree.segments().forEach(segment -> segmentFiles.addAll(filesOf(segment)));
+        }
+        assertTrue(afterB.length > beforeB.length + 1, "precondition: B's flush must have appended a record");
+
+        // Every length a crash mid-append could leave: from one byte of B's record to all but its last byte.
+        for(int length = beforeB.length + 1; length < afterB.length; length++){
+            Files.write(manifest(), Arrays.copyOf(afterB, length));
+            assertRefusedTwiceAndNothingDeleted(segmentFiles, "B's record torn to " + (length - beforeB.length) + " bytes");
+        }
+
+        // The file size reached disk but B's bytes did not: the record reads back as zeros.
+        byte[] zeroTail = afterB.clone();
+        Arrays.fill(zeroTail, beforeB.length, zeroTail.length, (byte) 0);
+        Files.write(manifest(), zeroTail);
+        assertRefusedTwiceAndNothingDeleted(segmentFiles, "B's record zero-filled at full length");
+    }
+
+    @Test
+    void everySingleBitFlipInTheManifestIsRefused() throws IOException{
+        List<Path> segmentFiles = new ArrayList<>();
+        try(LSMTree<Integer> tree = openTree()){
+            tree.put(1, value(1));
+            tree.flush();
+            tree.put(2, value(2));
+            tree.flush();
+            tree.segments().forEach(segment -> segmentFiles.addAll(filesOf(segment)));
+        }
+        byte[] intact = Files.readAllBytes(manifest());
+
+        for(int bit = 0; bit < intact.length * 8; bit++){
+            byte[] flipped = intact.clone();
+            flipped[bit / 8] ^= (byte) (1 << (bit % 8));
+            Files.write(manifest(), flipped);
+            final int flippedBit = bit;
+            assertThrows(IOException.class, () -> Manifest.readAll(manifest().toFile()), () -> "bit " + flippedBit + " (byte " + flippedBit / 8 + ") flipped, yet the manifest was accepted");
+        }
+
+        byte[] lastByteFlipped = intact.clone();
+        lastByteFlipped[lastByteFlipped.length - 1] ^= 0x01;
+        Files.write(manifest(), lastByteFlipped);
+        assertRefusedTwiceAndNothingDeleted(segmentFiles, "a bit flip in the last record");
     }
 }

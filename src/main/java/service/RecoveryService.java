@@ -79,8 +79,7 @@ public class RecoveryService<K extends Comparable<K>> {
                 throw new IOException(String.format(
                         "%s is listed live in %s but its files are incomplete "
                                 + "(dataFile=%b, indexFile=%b, bloomFilter=%b). Refusing to open rather "
-                                + "than serve incomplete reads; remove that entry from the manifest to "
-                                + "open without this segment.",
+                                + "than serve incomplete reads.",
                         dataFileName, manifestFile, dataFileExists, indexFileExists, bloomFilterExists));
             }
 
