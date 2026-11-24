@@ -7,6 +7,7 @@ import core.Segment;
 import core.key.KeyCodec;
 import core.key.KeyCodecImpl.IntegerKeyCodec;
 import manifest.Manifest;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -41,6 +42,12 @@ public class RecoveryScanTest {
 
     @TempDir
     Path dir;
+
+    private Manifest manifest;
+    @BeforeEach
+    void createManifest(){
+        manifest = new Manifest(manifest().toFile());
+    }
 
     private LSMTree<Integer> openTree() throws IOException {
         return openTree(new IntegerKeyCodec());
@@ -275,8 +282,8 @@ public class RecoveryScanTest {
     void failedManifestRewritesStillOpens() throws IOException{
         String liveName = flushOneSegment(1).getFirst().getFileName().toString();
         // A duplicate line makes the rewrite observable: a successful one would collapse it.
-        Manifest.append(liveName, manifest().toFile());
-        List<String> before = Manifest.readAll(manifest().toFile());
+        this.manifest.append(liveName);
+        List<String> before = this.manifest.readAll();
         assertEquals(List.of(liveName, liveName), before, "precondition: the live name must be listed twice");
 
         // Manifest.rewrite opens manifest.log.tmp first; a directory there makes it throw.
@@ -286,7 +293,7 @@ public class RecoveryScanTest {
             assertArrayEquals(value(1), tree.get(1), "a failed rewrite is housekeeping and must not fail the open");
         }
 
-        assertEquals(before, Manifest.readAll(manifest().toFile()), "a failed rewrite leaves the manifest as it was");
+        assertEquals(before, this.manifest.readAll(), "a failed rewrite leaves the manifest as it was");
     }
 
     @Test
@@ -324,7 +331,7 @@ public class RecoveryScanTest {
         }
 
         assertFalse(Files.exists(leftoverTmp), "the leftover must be replaced and renamed away, not left behind");
-        assertEquals(1, Manifest.readAll(manifest().toFile()).size(),
+        assertEquals(1, this.manifest.readAll().size(),
                 "nothing from the leftover may reach the manifest; only the flush's entry");
     }
 
@@ -400,7 +407,7 @@ public class RecoveryScanTest {
             flipped[bit / 8] ^= (byte) (1 << (bit % 8));
             Files.write(manifest(), flipped);
             final int flippedBit = bit;
-            assertThrows(IOException.class, () -> Manifest.readAll(manifest().toFile()), () -> "bit " + flippedBit + " (byte " + flippedBit / 8 + ") flipped, yet the manifest was accepted");
+            assertThrows(IOException.class, () -> this.manifest.readAll(), () -> "bit " + flippedBit + " (byte " + flippedBit / 8 + ") flipped, yet the manifest was accepted");
         }
 
         byte[] lastByteFlipped = intact.clone();

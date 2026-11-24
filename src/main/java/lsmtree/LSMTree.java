@@ -49,6 +49,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
     private final CleanUpService<K> cleanUpService;
     private final RecoveryService<K> recoveryService;
     private final TombStoneRetentionPolicy<K> tombStoneRetentionPolicy;
+    private final Manifest manifest;
 
     public LSMTree(KeyCodec<K> codec, Path dataDir, int indexSampleRate, int memTableThreshold, CompactionStrategy<K> compactionStrategy, MergeStrategy<K> mergeStrategy) throws IOException {
         Files.createDirectories(dataDir);
@@ -57,6 +58,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         this.memTableThreshold = memTableThreshold;
         this.indexSampleRate = indexSampleRate;
         this.wal = new WAL<>(this.codec, dataDir.resolve(FileConstants.WAL_FILE_NAME).toFile());
+        this.manifest = new Manifest(manifestFile());
         this.ssTable = new SSTable<>(codec);
         this.version = new AtomicReference<>(new Version<K>(new MemTable<>(memTableThreshold, codec), new ArrayList<>()));
         this.eventCounter = new AtomicLong(0);
@@ -64,9 +66,9 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         this.cleanUpService = new CleanUpService<>(this::oldestOpenPinAgeInMillis);
         this.segmentFileFactory = new SegmentFileFactory(dataDir);
         this.compactionService = new CompactionService<>(dataDir, indexSampleRate, compactionStrategy, mergeStrategy,
-                this.version, this.manifestLock, this.cleanUpService);
+                this.version, this.manifestLock, this.cleanUpService, this.manifest);
         this.recoveryService = new RecoveryService<K>(dataDir, this.ssTable, this.wal, memTableThreshold,
-                this.version, this.manifestLock, codec);
+                this.version, this.manifestLock, codec, this.manifest);
 
         try {
             long maxEventId = this.recoveryService.recover();
@@ -115,7 +117,7 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         FileUtils.fsyncDirectory(this.dataDir);
 
         synchronized (this.manifestLock) {
-            Manifest.append(segment.getDataFile().getName(), manifestFile());
+            this.manifest.append(segment.getDataFile().getName());
             this.version.updateAndGet(current -> {
                 List<Segment<K>> newList = new ArrayList<>(current.segments());
                 newList.add(segment);

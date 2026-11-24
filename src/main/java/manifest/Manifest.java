@@ -8,6 +8,7 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
@@ -18,13 +19,18 @@ import java.util.zip.Checksum;
 
 public class Manifest {
     private static final byte[] magic = "MANIFEST".getBytes(StandardCharsets.UTF_8);
-    private static final int HEADER_SIZE = 16;
     private static final int MAGIC_OFFSET = 0;
-    private static final int CRC_OFFSET       = 8;
-    private static final int LENGTH_OFFSET    = 12;
+    private static final int CRC_OFFSET = magic.length;
+    private static final int LENGTH_OFFSET = CRC_OFFSET+4;
+    private static final int HEADER_SIZE = LENGTH_OFFSET+4;
     private static final int CRC_COVERED_FROM = LENGTH_OFFSET;
+    private final File manifestFile;
 
-    public static void append(String segmentId, File manifestFile) throws IOException {
+    public Manifest(File manifestFile){
+        this.manifestFile = manifestFile;
+    }
+
+    public void append(String segmentId) throws IOException {
         try(RandomAccessFile outputStream = new RandomAccessFile(manifestFile, "rw")){
             outputStream.seek(outputStream.length());
 
@@ -34,7 +40,7 @@ public class Manifest {
         }
     }
 
-    public static List<String> readAll(File manifestFile) throws IOException {
+    public List<String> readAll() throws IOException {
         List<String> segmentIds = new ArrayList<>();
         long fileSize = Files.size(manifestFile.toPath());
         long position = 0;
@@ -93,7 +99,7 @@ public class Manifest {
         return segmentIds;
     }
 
-    public static void rewrite(List<String> segmentIds, File manifestFile) throws IOException {
+    public void rewrite(List<String> segmentIds) throws IOException {
         File tmpFile = new File(manifestFile.getParent(), manifestFile.getName() + ".tmp");
         try(FileChannel channel = FileChannel.open(tmpFile.toPath(), StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)){
             writeFully(channel, FileConstants.MANIFEST_FILE_START_LINE);
@@ -110,7 +116,7 @@ public class Manifest {
         }
     }
 
-    public static void initialiseManifestFile(File manifestFile) throws IOException{
+    public void initialiseManifestFile() throws IOException{
         if(manifestFile.exists()){
             byte[] expectedHeader = FileConstants.MANIFEST_FILE_START_LINE.getBytes(StandardCharsets.UTF_8);
             if(Files.size(manifestFile.toPath()) < expectedHeader.length){
@@ -124,11 +130,19 @@ public class Manifest {
                 }
             }
         }else{
-            rewrite(List.of(), manifestFile);
+            rewrite(List.of());
         }
     }
 
-    private static byte[] encodeRecord(String segmentId) throws IOException{
+    public boolean fileExists(){
+        return this.manifestFile.exists();
+    }
+
+    public Path getFilePath(){
+        return this.manifestFile.toPath();
+    }
+
+    private byte[] encodeRecord(String segmentId) throws IOException{
         ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream(HEADER_SIZE + 32);
         DataOutputStream dataOutputStream = new DataOutputStream(byteArrayOutputStream);
         byte[] data = segmentId.getBytes(StandardCharsets.UTF_8);
@@ -142,11 +156,11 @@ public class Manifest {
         return frame;
     }
 
-    private static Checksum newChecksum(){
+    private Checksum newChecksum(){
         return new CRC32C();
     }
 
-    private static int getCRC32CCheckSum(byte[] data, int offset, int length){
+    private int getCRC32CCheckSum(byte[] data, int offset, int length){
         Checksum crc32 = newChecksum();
         crc32.update(data, offset, length);
         return (int) crc32.getValue();

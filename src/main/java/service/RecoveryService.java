@@ -37,10 +37,11 @@ public class RecoveryService<K extends Comparable<K>> {
     private final KeyCodec<K> keyCodec;
     private final AtomicReference<Version<K>> version;
     private final Object manifestLock;
+    private final Manifest manifest;
     private static final System.Logger LOG = System.getLogger(RecoveryService.class.getName());
 
     public RecoveryService(Path dataDir, SSTable<K> ssTable, WAL<K> wal, int memTableThreshold,
-                            AtomicReference<Version<K>> version, Object manifestLock, KeyCodec<K> keyCodec) {
+                            AtomicReference<Version<K>> version, Object manifestLock, KeyCodec<K> keyCodec, Manifest manifest) {
         this.dataDir = dataDir;
         this.ssTable = ssTable;
         this.wal = wal;
@@ -48,21 +49,21 @@ public class RecoveryService<K extends Comparable<K>> {
         this.version = version;
         this.manifestLock = manifestLock;
         this.keyCodec = keyCodec;
+        this.manifest = manifest;
     }
 
     public long recover() throws IOException {
-        File manifestFile = manifestFile();
 
         Version<K> currentVersion = this.version.get();
         long maxEventId = 0;
         List<Segment<K>> segments = new ArrayList<>(currentVersion.segments());
 
         Map<String, List<String>> filesGrouping = scanDirectory();
-        boolean manifestFileExists = manifestFile.exists();
-        if(!manifestFileExists && !filesGrouping.isEmpty()) throw new IOException("Manifest file ("+manifestFile.getAbsolutePath()+") does not exist while "+filesGrouping.size()+" segments are present.");
+        boolean manifestFileExists = this.manifest.fileExists();
+        if(!manifestFileExists && !filesGrouping.isEmpty()) throw new IOException("Manifest file ("+this.manifest.getFilePath()+") does not exist while "+filesGrouping.size()+" segments are present.");
 
-        Manifest.initialiseManifestFile(manifestFile);
-        LinkedHashSet<String> liveDataFiles = new LinkedHashSet<>(Manifest.readAll(manifestFile));
+        this.manifest.initialiseManifestFile();
+        LinkedHashSet<String> liveDataFiles = new LinkedHashSet<>(this.manifest.readAll());
 
 
         for (String dataFileName : liveDataFiles) {
@@ -80,7 +81,7 @@ public class RecoveryService<K extends Comparable<K>> {
                         "%s is listed live in %s but its files are incomplete "
                                 + "(dataFile=%b, indexFile=%b, bloomFilter=%b). Refusing to open rather "
                                 + "than serve incomplete reads.",
-                        dataFileName, manifestFile, dataFileExists, indexFileExists, bloomFilterExists));
+                        dataFileName, this.manifest.getFilePath(), dataFileExists, indexFileExists, bloomFilterExists));
             }
 
             try (RandomAccessFile bloomFilterFileReader = new RandomAccessFile(bloomFilterFile, "r")) {
@@ -121,10 +122,10 @@ public class RecoveryService<K extends Comparable<K>> {
 
         try {
             synchronized (this.manifestLock) {
-                Manifest.rewrite(liveDataFiles.stream().toList(), manifestFile);
+                this.manifest.rewrite(liveDataFiles.stream().toList());
             }
         } catch (IOException e) {
-            LOG.log(System.Logger.Level.WARNING, "could not compact the manifest at " + manifestFile
+            LOG.log(System.Logger.Level.WARNING, "could not compact the manifest at " + this.manifest.getFilePath()
                     + "; opening anyway with its uncompacted contents: " + e.getMessage());
         }
 
@@ -153,9 +154,5 @@ public class RecoveryService<K extends Comparable<K>> {
             }
         }
         return segmentFiles;
-    }
-
-    private File manifestFile() {
-        return this.dataDir.resolve(FileConstants.MANIFEST_FILE_NAME).toFile();
     }
 }

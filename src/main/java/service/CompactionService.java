@@ -4,12 +4,10 @@ import core.ManagedFileSupplier;
 import lsmtree.Version;
 import compaction.CompactionStrategy;
 import compaction.MergeStrategy;
-import constants.FileConstants;
 import core.FileUtils;
 import core.Segment;
 import manifest.Manifest;
 
-import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -35,10 +33,11 @@ public class CompactionService<K extends Comparable<K>> {
     private final ExecutorService compactionExecutor = Executors.newSingleThreadExecutor();
     private final AtomicBoolean compactionInProgress = new AtomicBoolean(false);
     private final SegmentFileFactory segmentFileFactory;
+    private final Manifest manifest;
 
     public CompactionService(Path dataDir, int indexSampleRate, CompactionStrategy<K> compactionStrategy,
                               MergeStrategy<K> mergeStrategy, AtomicReference<Version<K>> version,
-                              Object manifestLock, CleanUpService<K> cleanUpService) {
+                              Object manifestLock, CleanUpService<K> cleanUpService, Manifest manifest) {
         this.dataDir = dataDir;
         this.indexSampleRate = indexSampleRate;
         this.compactionStrategy = compactionStrategy;
@@ -47,6 +46,7 @@ public class CompactionService<K extends Comparable<K>> {
         this.manifestLock = manifestLock;
         this.cleanUpService = cleanUpService;
         this.segmentFileFactory = new SegmentFileFactory(dataDir);
+        this.manifest = manifest;
     }
 
     public void checkAndCompactAsync() {
@@ -95,7 +95,7 @@ public class CompactionService<K extends Comparable<K>> {
             }
             Version<K> currentVersion = this.version.get();
             List<Segment<K>> currentVersionSegmentList = new ArrayList<>(currentVersion.segments());
-            Manifest.rewrite(currentVersionSegmentList.stream().map(kSegment -> kSegment.getDataFile().getName()).toList(),manifestFile());
+            this.manifest.rewrite(currentVersionSegmentList.stream().map(kSegment -> kSegment.getDataFile().getName()).toList());
         }
 
         selectedSegments.forEach(Segment::markDeleted);
@@ -136,10 +136,6 @@ public class CompactionService<K extends Comparable<K>> {
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
-    }
-
-    private File manifestFile() {
-        return this.dataDir.resolve(FileConstants.MANIFEST_FILE_NAME).toFile();
     }
 
     private boolean tryReplaceSegments(List<Segment<K>> supersededSegments, List<Segment<K>> newSegments){
