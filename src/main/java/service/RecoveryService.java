@@ -1,6 +1,7 @@
 package service;
 
 import core.FileUtils;
+import core.RecoveryMetaData;
 import lsmtree.Version;
 import sstable.SSTable;
 import wal.WAL;
@@ -37,11 +38,11 @@ public class RecoveryService<K extends Comparable<K>> {
     private final KeyCodec<K> keyCodec;
     private final AtomicReference<Version<K>> version;
     private final Object manifestLock;
-    private final Manifest manifest;
+    private final File manifestFile;
     private static final System.Logger LOG = System.getLogger(RecoveryService.class.getName());
 
     public RecoveryService(Path dataDir, SSTable<K> ssTable, WAL<K> wal, int memTableThreshold,
-                            AtomicReference<Version<K>> version, Object manifestLock, KeyCodec<K> keyCodec, Manifest manifest) {
+                            AtomicReference<Version<K>> version, Object manifestLock, KeyCodec<K> keyCodec, File manifestFile) {
         this.dataDir = dataDir;
         this.ssTable = ssTable;
         this.wal = wal;
@@ -49,21 +50,21 @@ public class RecoveryService<K extends Comparable<K>> {
         this.version = version;
         this.manifestLock = manifestLock;
         this.keyCodec = keyCodec;
-        this.manifest = manifest;
+        this.manifestFile = manifestFile;
     }
 
-    public long recover() throws IOException {
+    public RecoveryMetaData recover() throws IOException {
 
         Version<K> currentVersion = this.version.get();
         long maxEventId = 0;
         List<Segment<K>> segments = new ArrayList<>(currentVersion.segments());
 
         Map<String, List<String>> filesGrouping = scanDirectory();
-        boolean manifestFileExists = this.manifest.fileExists();
-        if(!manifestFileExists && !filesGrouping.isEmpty()) throw new IOException("Manifest file ("+this.manifest.getFilePath()+") does not exist while "+filesGrouping.size()+" segments are present.");
+        boolean manifestFileExists = Files.exists(manifestFile.toPath());
+        if(!manifestFileExists && !filesGrouping.isEmpty()) throw new IOException("Manifest file ("+manifestFile.getAbsolutePath()+") does not exist while "+filesGrouping.size()+" segments are present.");
 
-        this.manifest.initialiseManifestFile();
-        LinkedHashSet<String> liveDataFiles = new LinkedHashSet<>(this.manifest.readAll());
+        Manifest manifest = Manifest.initialiseManifestFile(manifestFile);
+        LinkedHashSet<String> liveDataFiles = new LinkedHashSet<>(manifest.readAll());
 
 
         for (String dataFileName : liveDataFiles) {
@@ -81,7 +82,7 @@ public class RecoveryService<K extends Comparable<K>> {
                         "%s is listed live in %s but its files are incomplete "
                                 + "(dataFile=%b, indexFile=%b, bloomFilter=%b). Refusing to open rather "
                                 + "than serve incomplete reads.",
-                        dataFileName, this.manifest.getFilePath(), dataFileExists, indexFileExists, bloomFilterExists));
+                        dataFileName, manifest.getFilePath(), dataFileExists, indexFileExists, bloomFilterExists));
             }
 
             try (RandomAccessFile bloomFilterFileReader = new RandomAccessFile(bloomFilterFile, "r")) {
@@ -122,14 +123,14 @@ public class RecoveryService<K extends Comparable<K>> {
 
         try {
             synchronized (this.manifestLock) {
-                this.manifest.rewrite(liveDataFiles.stream().toList());
+                manifest.rewrite(liveDataFiles.stream().toList());
             }
         } catch (IOException e) {
-            LOG.log(System.Logger.Level.WARNING, "could not compact the manifest at " + this.manifest.getFilePath()
+            LOG.log(System.Logger.Level.WARNING, "could not compact the manifest at " + manifest.getFilePath()
                     + "; opening anyway with its uncompacted contents: " + e.getMessage());
         }
 
-        return Math.max(maxEventId, this.wal.getLatestEventId());
+        return new RecoveryMetaData(manifest, Math.max(maxEventId, this.wal.getLatestEventId()));
     }
 
     private void deleteSegmentFiles(String dataFileName) throws IOException {

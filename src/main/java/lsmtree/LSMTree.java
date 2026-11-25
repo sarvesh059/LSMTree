@@ -58,28 +58,27 @@ public class LSMTree<K extends Comparable<K>> implements Closeable {
         this.memTableThreshold = memTableThreshold;
         this.indexSampleRate = indexSampleRate;
         this.wal = new WAL<>(this.codec, dataDir.resolve(FileConstants.WAL_FILE_NAME).toFile());
-        this.manifest = new Manifest(manifestFile());
         this.ssTable = new SSTable<>(codec);
         this.version = new AtomicReference<>(new Version<K>(new MemTable<>(memTableThreshold, codec), new ArrayList<>()));
         this.eventCounter = new AtomicLong(0);
 
         this.cleanUpService = new CleanUpService<>(this::oldestOpenPinAgeInMillis);
         this.segmentFileFactory = new SegmentFileFactory(dataDir);
-        this.compactionService = new CompactionService<>(dataDir, indexSampleRate, compactionStrategy, mergeStrategy,
-                this.version, this.manifestLock, this.cleanUpService, this.manifest);
         this.recoveryService = new RecoveryService<K>(dataDir, this.ssTable, this.wal, memTableThreshold,
-                this.version, this.manifestLock, codec, this.manifest);
+                this.version, this.manifestLock, codec, manifestFile());
 
         try {
-            long maxEventId = this.recoveryService.recover();
-            this.eventCounter.set(maxEventId);
+            RecoveryMetaData recoveryMetaData = this.recoveryService.recover();
+            this.manifest = recoveryMetaData.manifest();
+            this.eventCounter.set(recoveryMetaData.maxEventId());
+            this.compactionService = new CompactionService<>(dataDir, indexSampleRate, compactionStrategy, mergeStrategy,
+                    this.version, this.manifestLock, this.cleanUpService, this.manifest);
         } catch (IOException | RuntimeException e) {
             try {
                 this.wal.close();
             } catch (IOException closeFailure) {
                 e.addSuppressed(closeFailure);
             }
-            this.compactionService.shutdown();
             throw e;
         }
         this.compactionService.checkAndCompactAsync();

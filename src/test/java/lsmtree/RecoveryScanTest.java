@@ -7,7 +7,6 @@ import core.Segment;
 import core.key.KeyCodec;
 import core.key.KeyCodecImpl.IntegerKeyCodec;
 import manifest.Manifest;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -43,10 +42,8 @@ public class RecoveryScanTest {
     @TempDir
     Path dir;
 
-    private Manifest manifest;
-    @BeforeEach
-    void createManifest(){
-        manifest = new Manifest(manifest().toFile());
+    private Manifest openManifest() throws IOException {
+        return Manifest.initialiseManifestFile(manifest().toFile());
     }
 
     private LSMTree<Integer> openTree() throws IOException {
@@ -282,8 +279,8 @@ public class RecoveryScanTest {
     void failedManifestRewritesStillOpens() throws IOException{
         String liveName = flushOneSegment(1).getFirst().getFileName().toString();
         // A duplicate line makes the rewrite observable: a successful one would collapse it.
-        this.manifest.append(liveName);
-        List<String> before = this.manifest.readAll();
+        openManifest().append(liveName);
+        List<String> before = openManifest().readAll();
         assertEquals(List.of(liveName, liveName), before, "precondition: the live name must be listed twice");
 
         // Manifest.rewrite opens manifest.log.tmp first; a directory there makes it throw.
@@ -293,7 +290,7 @@ public class RecoveryScanTest {
             assertArrayEquals(value(1), tree.get(1), "a failed rewrite is housekeeping and must not fail the open");
         }
 
-        assertEquals(before, this.manifest.readAll(), "a failed rewrite leaves the manifest as it was");
+        assertEquals(before, openManifest().readAll(), "a failed rewrite leaves the manifest as it was");
     }
 
     @Test
@@ -318,6 +315,8 @@ public class RecoveryScanTest {
     @ParameterizedTest(name = "leftover tmp = \"{0}\"")
     @ValueSource(strings = {"", "manifest-start\n", "manifest-st", "dataFile-x;\ndataFile-y;\n"})
     void creationInterruptedBeforeItsRenameLeavesAStoreThatOpens(String leftover) throws IOException {
+        assertFalse(Files.exists(manifest()), "precondition: the store is new, so the creation path must run");
+
         Path leftoverTmp = dir.resolve(FileConstants.MANIFEST_FILE_NAME + ".tmp");
         Files.writeString(leftoverTmp, leftover, StandardCharsets.UTF_8);
 
@@ -331,7 +330,7 @@ public class RecoveryScanTest {
         }
 
         assertFalse(Files.exists(leftoverTmp), "the leftover must be replaced and renamed away, not left behind");
-        assertEquals(1, this.manifest.readAll().size(),
+        assertEquals(1, openManifest().readAll().size(),
                 "nothing from the leftover may reach the manifest; only the flush's entry");
     }
 
@@ -407,7 +406,7 @@ public class RecoveryScanTest {
             flipped[bit / 8] ^= (byte) (1 << (bit % 8));
             Files.write(manifest(), flipped);
             final int flippedBit = bit;
-            assertThrows(IOException.class, () -> this.manifest.readAll(), () -> "bit " + flippedBit + " (byte " + flippedBit / 8 + ") flipped, yet the manifest was accepted");
+            assertThrows(IOException.class, () -> openManifest().readAll(), () -> "bit " + flippedBit + " (byte " + flippedBit / 8 + ") flipped, yet the manifest was accepted");
         }
 
         byte[] lastByteFlipped = intact.clone();

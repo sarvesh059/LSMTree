@@ -14,6 +14,7 @@ import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.zip.CRC32C;
 import java.util.zip.Checksum;
 
@@ -21,13 +22,16 @@ public class Manifest {
     private static final byte[] magic = "MANIFEST".getBytes(StandardCharsets.UTF_8);
     private static final int MAGIC_OFFSET = 0;
     private static final int CRC_OFFSET = magic.length;
-    private static final int LENGTH_OFFSET = CRC_OFFSET+4;
+    private static final int SEQUENCE_OFFSET=CRC_OFFSET+4;
+    private static final int LENGTH_OFFSET = SEQUENCE_OFFSET+8;
     private static final int HEADER_SIZE = LENGTH_OFFSET+4;
-    private static final int CRC_COVERED_FROM = LENGTH_OFFSET;
+    private static final int CRC_COVERED_FROM = SEQUENCE_OFFSET;
     private final File manifestFile;
+    private final AtomicLong sequenceNumber;
 
-    public Manifest(File manifestFile){
+    private Manifest(File manifestFile, long sequenceNumber){
         this.manifestFile = manifestFile;
+        this.sequenceNumber = new AtomicLong(sequenceNumber);
     }
 
     public void append(String segmentId) throws IOException {
@@ -41,7 +45,13 @@ public class Manifest {
     }
 
     public List<String> readAll() throws IOException {
-        List<String> segmentIds = new ArrayList<>();
+        List<ManifestRecord> records = readAllRecords(this.manifestFile);
+
+        return records.stream().map(ManifestRecord::segmentId).toList();
+    }
+
+    private static List<ManifestRecord> readAllRecords(File manifestFile) throws IOException{
+        List<ManifestRecord> records = new ArrayList<>();
         long fileSize = Files.size(manifestFile.toPath());
         long position = 0;
         try(DataInputStream in = new DataInputStream(new BufferedInputStream(Files.newInputStream(manifestFile.toPath()), 64*1024))){
@@ -70,6 +80,7 @@ public class Manifest {
                 }
 
                 int readChecksum = ByteBuffer.wrap(header).getInt(CRC_OFFSET);
+                long sequenceNumber = ByteBuffer.wrap(header).getLong(SEQUENCE_OFFSET);
                 int payloadLength = ByteBuffer.wrap(header).getInt(LENGTH_OFFSET);
 
                 if(payloadLength < 0){
@@ -91,12 +102,14 @@ public class Manifest {
                     throw new IOException("Corrupted record found at position: "+(position-payloadLength-HEADER_SIZE) + ". File: "+manifestFile.getAbsolutePath());
                 }
 
-                segmentIds.add(new String(payload, StandardCharsets.UTF_8));
+                String segmentId = new String(payload, StandardCharsets.UTF_8);
+                records.add(new ManifestRecord(sequenceNumber, segmentId));
+
             }
 
         }
 
-        return segmentIds;
+        return records;
     }
 
     public void rewrite(List<String> segmentIds) throws IOException {
@@ -116,21 +129,19 @@ public class Manifest {
         }
     }
 
-    public void initialiseManifestFile() throws IOException{
+    public static Manifest initialiseManifestFile(File manifestFile) throws IOException{
         if(manifestFile.exists()){
             byte[] expectedHeader = FileConstants.MANIFEST_FILE_START_LINE.getBytes(StandardCharsets.UTF_8);
             if(Files.size(manifestFile.toPath()) < expectedHeader.length){
                 throw new IOException("Truncated Manifest header found: "+ manifestFile.getAbsolutePath());
             }
-            try(DataInputStream in = new DataInputStream(new BufferedInputStream(Files.newInputStream(manifestFile.toPath()), 64*1024))){
-                byte[] manifestHeader = new byte[expectedHeader.length];
-                in.readFully(manifestHeader);
-                if(!Arrays.equals(expectedHeader, manifestHeader)){
-                    throw new IOException("Manifest file not recognised: "+ manifestFile.getAbsolutePath());
-                }
-            }
+            List<ManifestRecord> manifestRecords = Manifest.readAllRecords(manifestFile);
+            long sequenceId = manifestRecords.stream().map(ManifestRecord::sequenceNumber).max(Long::compareTo).orElse(0L);
+            return new Manifest(manifestFile, sequenceId);
         }else{
-            rewrite(List.of());
+            Manifest manifest = new Manifest(manifestFile, 0);
+            manifest.rewrite(List.of());
+            return manifest;
         }
     }
 
@@ -148,6 +159,7 @@ public class Manifest {
         byte[] data = segmentId.getBytes(StandardCharsets.UTF_8);
         dataOutputStream.write(magic); //magic
         dataOutputStream.writeInt(0); //CRC placeholder
+        dataOutputStream.writeLong(sequenceNumber.incrementAndGet()); // sequence number
         dataOutputStream.writeInt(data.length); //length
         dataOutputStream.write(data); // data
 
@@ -156,7 +168,7 @@ public class Manifest {
         return frame;
     }
 
-    private Checksum newChecksum(){
+    private static Checksum newChecksum(){
         return new CRC32C();
     }
 
