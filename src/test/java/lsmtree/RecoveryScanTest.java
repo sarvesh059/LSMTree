@@ -277,20 +277,33 @@ public class RecoveryScanTest {
 
     @Test
     void failedManifestRewritesStillOpens() throws IOException{
-        String liveName = flushOneSegment(1).getFirst().getFileName().toString();
-        // A duplicate line makes the rewrite observable: a successful one would collapse it.
-        openManifest().append(liveName);
-        List<String> before = openManifest().readAll();
-        assertEquals(List.of(liveName, liveName), before, "precondition: the live name must be listed twice");
+        // Two flushes in one session leave several records; the open's rewrite would collapse them into one.
+        // That difference in bytes is what makes a rewrite observable.
+        try(LSMTree<Integer> tree = openTree()){
+            tree.put(1, value(1));
+            tree.flush();
+            tree.put(2, value(2));
+            tree.flush();
+        }
+        byte[] before = Files.readAllBytes(manifest());
 
         // Manifest.rewrite opens manifest.log.tmp first; a directory there makes it throw.
-        Files.createDirectory(dir.resolve(FileConstants.MANIFEST_FILE_NAME+".tmp"));
+        Path blocker = dir.resolve(FileConstants.MANIFEST_FILE_NAME + ".tmp");
+        Files.createDirectory(blocker);
 
         try(LSMTree<Integer> tree = openTree()){
             assertArrayEquals(value(1), tree.get(1), "a failed rewrite is housekeeping and must not fail the open");
+            assertArrayEquals(value(2), tree.get(2), "a failed rewrite is housekeeping and must not fail the open");
         }
+        assertArrayEquals(before, Files.readAllBytes(manifest()), "a failed rewrite leaves the manifest as it was");
 
-        assertEquals(before, openManifest().readAll(), "a failed rewrite leaves the manifest as it was");
+        // Sanity: without the blocker the rewrite does change the bytes, so the assertion above can fail.
+        Files.delete(blocker);
+        try(LSMTree<Integer> tree = openTree()){
+            assertArrayEquals(value(2), tree.get(2));
+        }
+        assertFalse(Arrays.equals(before, Files.readAllBytes(manifest())),
+                "precondition: a successful rewrite must be visible in the manifest's bytes");
     }
 
     @Test

@@ -1,4 +1,4 @@
 package manifest;
 
-public record ManifestRecord(Long sequenceNumber, String segmentId) {
+public record ManifestRecord(Long sequenceNumber, ManifestPayload manifestPayload) {
 }

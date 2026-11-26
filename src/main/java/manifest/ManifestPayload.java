@@ -36,6 +36,10 @@ public class ManifestPayload {
         return byteArrayOutputStream.toByteArray();
     }
 
+    public List<SegmentChangeLog> getSegmentChangeLogs(){
+        return this.segmentChangeLogs;
+    }
+
     public static ManifestPayload decode(byte[] data) throws IOException {
         ByteBuffer byteBuffer = ByteBuffer.wrap(data);
         int totalLogs = byteBuffer.getInt();

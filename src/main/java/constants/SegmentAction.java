@@ -4,7 +4,7 @@ import java.util.Arrays;
 
 public enum SegmentAction {
     ADDED("ADDED"),
-    DELETED("DELETED");
+    REMOVED("REMOVED");
 
     private final String action;
 

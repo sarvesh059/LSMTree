@@ -1,6 +1,7 @@
 package manifest;
 
 import constants.FileConstants;
+import constants.SegmentAction;
 import core.FileUtils;
 
 import java.io.*;
@@ -13,7 +14,9 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.zip.CRC32C;
 import java.util.zip.Checksum;
@@ -38,7 +41,10 @@ public class Manifest {
         try(RandomAccessFile outputStream = new RandomAccessFile(manifestFile, "rw")){
             outputStream.seek(outputStream.length());
 
-            byte[] record = encodeRecord(segmentId);
+            SegmentChangeLog segmentChangeLog = new SegmentChangeLog(segmentId, SegmentAction.ADDED);
+            ManifestPayload manifestPayload = new ManifestPayload(List.of(segmentChangeLog));
+
+            byte[] record = encodeRecord(manifestPayload);
             outputStream.write(record);
             outputStream.getFD().sync();
         }
@@ -46,8 +52,18 @@ public class Manifest {
 
     public List<String> readAll() throws IOException {
         List<ManifestRecord> records = readAllRecords(this.manifestFile);
-
-        return records.stream().map(ManifestRecord::segmentId).toList();
+        Set<String> segmentSet = new LinkedHashSet<>();
+        for(ManifestRecord record: records){
+            ManifestPayload payload = record.manifestPayload();
+            for(SegmentChangeLog segmentChangeLog: payload.getSegmentChangeLogs()){
+                if(segmentChangeLog.segmentAction().equals(SegmentAction.ADDED)){
+                    segmentSet.add(segmentChangeLog.segmentId());
+                }else if(segmentChangeLog.segmentAction().equals(SegmentAction.REMOVED)){
+                    segmentSet.remove(segmentChangeLog.segmentId());
+                }
+            }
+        }
+        return segmentSet.stream().toList();
     }
 
     private static List<ManifestRecord> readAllRecords(File manifestFile) throws IOException{
@@ -102,8 +118,8 @@ public class Manifest {
                     throw new IOException("Corrupted record found at position: "+(position-payloadLength-HEADER_SIZE) + ". File: "+manifestFile.getAbsolutePath());
                 }
 
-                String segmentId = new String(payload, StandardCharsets.UTF_8);
-                records.add(new ManifestRecord(sequenceNumber, segmentId));
+                ManifestPayload  manifestPayload = ManifestPayload.decode(payload);
+                records.add(new ManifestRecord(sequenceNumber, manifestPayload));
 
             }
 
@@ -116,10 +132,15 @@ public class Manifest {
         File tmpFile = new File(manifestFile.getParent(), manifestFile.getName() + ".tmp");
         try(FileChannel channel = FileChannel.open(tmpFile.toPath(), StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)){
             writeFully(channel, FileConstants.MANIFEST_FILE_START_LINE);
+            List<SegmentChangeLog> segmentChangeLogList = new ArrayList<>();
             for(String segmentId: segmentIds){
-                byte[] data = encodeRecord(segmentId);
-                writeFully(channel, data);
+                SegmentChangeLog segmentChangeLog = new SegmentChangeLog(segmentId, SegmentAction.ADDED);
+                segmentChangeLogList.add(segmentChangeLog);
             }
+
+            ManifestPayload manifestPayload = new ManifestPayload(segmentChangeLogList);
+            byte[] data = encodeRecord(manifestPayload);
+            writeFully(channel, data);
             channel.force(true);
         }
         Files.move(tmpFile.toPath(), manifestFile.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
@@ -153,10 +174,10 @@ public class Manifest {
         return this.manifestFile.toPath();
     }
 
-    private byte[] encodeRecord(String segmentId) throws IOException{
+    private byte[] encodeRecord(ManifestPayload manifestPayload) throws IOException{
         ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream(HEADER_SIZE + 32);
         DataOutputStream dataOutputStream = new DataOutputStream(byteArrayOutputStream);
-        byte[] data = segmentId.getBytes(StandardCharsets.UTF_8);
+        byte[] data = manifestPayload.encode();
         dataOutputStream.write(magic); //magic
         dataOutputStream.writeInt(0); //CRC placeholder
         dataOutputStream.writeLong(sequenceNumber.incrementAndGet()); // sequence number
