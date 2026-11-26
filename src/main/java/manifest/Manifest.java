@@ -73,6 +73,7 @@ public class Manifest {
         List<ManifestRecord> records = new ArrayList<>();
         long fileSize = Files.size(manifestFile.toPath());
         long position = 0;
+        long lastSequenceNumber = -1;
         try(DataInputStream in = new DataInputStream(new BufferedInputStream(Files.newInputStream(manifestFile.toPath()), 64*1024))){
             byte[] expectedHeader = FileConstants.MANIFEST_FILE_START_LINE.getBytes(StandardCharsets.UTF_8);
             byte[] manifestHeader = new byte[expectedHeader.length];
@@ -100,6 +101,7 @@ public class Manifest {
 
                 int readChecksum = ByteBuffer.wrap(header).getInt(CRC_OFFSET);
                 long sequenceNumber = ByteBuffer.wrap(header).getLong(SEQUENCE_OFFSET);
+
                 int payloadLength = ByteBuffer.wrap(header).getInt(LENGTH_OFFSET);
 
                 if(payloadLength < 0){
@@ -120,6 +122,9 @@ public class Manifest {
                 if(readChecksum != (int) crc.getValue()){
                     throw new IOException("Corrupted record found at position: "+(position-payloadLength-HEADER_SIZE) + ". File: "+manifestFile.getAbsolutePath());
                 }
+
+                if(lastSequenceNumber != -1 && sequenceNumber != lastSequenceNumber+1) throw new IOException("Missing Sequence numbers in manifest between "+lastSequenceNumber+ " and "+sequenceNumber + " at position: "+ (position-payloadLength-HEADER_SIZE) + ". File: "+manifestFile.getAbsolutePath());
+                lastSequenceNumber = sequenceNumber;
 
                 ManifestPayload  manifestPayload = ManifestPayload.decode(payload);
                 records.add(new ManifestRecord(sequenceNumber, manifestPayload));
