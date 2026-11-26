@@ -21,7 +21,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Random;
 import java.util.UUID;
 import java.util.zip.CRC32C;
 
@@ -173,6 +178,41 @@ public class RecoveryScanTest {
             tree.segments().forEach(segment -> segmentFiles.addAll(filesOf(segment)));
         }
         return segmentFiles;
+    }
+
+    private record CompactedManifest(byte[] beforeCompaction, byte[] afterCompaction, List<Path> segmentFiles, List<String> removedNames) {}
+
+    // Flushes A and B, then compacts them into one segment, so the manifest ends with a compaction record:
+    // [add output, remove A, remove B]. A crash during that append happens before the inputs are cleaned up,
+    // so the inputs' files are put back to match. Returns the manifest's bytes before and after the record,
+    // every segment file on disk (inputs and output), and the data-file names of the compacted inputs.
+    private CompactedManifest compactTwoSegments() throws IOException{
+        try(LSMTree<Integer> tree = openTree()){
+            tree.put(1, value(1));
+            tree.flush();
+            tree.put(2, value(2));
+            tree.flush();
+            byte[] before = Files.readAllBytes(manifest());
+            List<String> inputNames = tree.segments().stream().map(segment -> segment.getDataFile().getName()).toList();
+            Map<Path, byte[]> inputFiles = new LinkedHashMap<>();
+            for(Segment<Integer> segment: tree.segments()){
+                for(Path file: filesOf(segment)) inputFiles.put(file, Files.readAllBytes(file));
+            }
+
+            tree.sharedCompactionLogic(tree.segments());
+            byte[] after = Files.readAllBytes(manifest());
+
+            List<Path> segmentFiles = new ArrayList<>(inputFiles.keySet());
+            tree.segments().forEach(segment -> segmentFiles.addAll(filesOf(segment)));
+            for(Map.Entry<Path, byte[]> input: inputFiles.entrySet()){
+                if(!Files.exists(input.getKey())) Files.write(input.getKey(), input.getValue());
+            }
+            return new CompactedManifest(before, after, segmentFiles, inputNames);
+        }
+    }
+
+    private static List<String> dataFileNames(LSMTree<Integer> tree){
+        return tree.segments().stream().map(segment -> segment.getDataFile().getName()).toList();
     }
 
     @Test
@@ -560,6 +600,98 @@ public class RecoveryScanTest {
             assertEquals(1, tree.segmentCount(), "reopen must not bring back the compacted inputs");
             assertArrayEquals(value(10), tree.get(1));
             assertArrayEquals(value(21), tree.get(2), "the newer value must win after reopen");
+        }
+    }
+
+    @Test
+    void everySingleBitFlipInACompactionRecordIsRefused() throws IOException{
+        CompactedManifest compacted = compactTwoSegments();
+        byte[] intact = compacted.afterCompaction();
+        int recordStart = compacted.beforeCompaction().length;
+        assertTrue(intact.length > recordStart + 1, "precondition: the compaction must have appended a record");
+
+        for(int bit = recordStart * 8; bit < intact.length * 8; bit++){
+            byte[] flipped = intact.clone();
+            flipped[bit / 8] ^= (byte) (1 << (bit % 8));
+            Files.write(manifest(), flipped);
+            final int flippedBit = bit;
+            assertThrows(IOException.class, () -> openManifest().readAll(),
+                    () -> "bit " + flippedBit + " (byte " + (flippedBit / 8 - recordStart) + " of the compaction record) flipped, yet the manifest was accepted");
+        }
+
+        // A flip inside a removed name is the dangerous one: misread, it would keep a compacted input live.
+        byte[] removedName = compacted.removedNames().getFirst().getBytes(StandardCharsets.UTF_8);
+        int removedEntry = indexOf(intact, removedName, recordStart);
+        assertTrue(removedEntry > 0, "precondition: the compaction record must name the compacted input it removes");
+        byte[] flippedRemove = intact.clone();
+        flippedRemove[removedEntry + removedName.length - 1] ^= 0x01;
+        Files.write(manifest(), flippedRemove);
+        assertRefusedTwiceAndNothingDeleted(compacted.segmentFiles(), "a bit flip in a remove entry of the compaction record");
+    }
+
+    @Test
+    void tornCompactionRecordRefusesToOpen() throws IOException{
+        CompactedManifest compacted = compactTwoSegments();
+        byte[] before = compacted.beforeCompaction();
+        byte[] after = compacted.afterCompaction();
+        assertTrue(after.length > before.length + 1, "precondition: the compaction must have appended a record");
+
+        // Every length a crash mid-append could leave: from one byte of the record to all but its last byte.
+        for(int length = before.length + 1; length < after.length; length++){
+            Files.write(manifest(), Arrays.copyOf(after, length));
+            assertRefusedTwiceAndNothingDeleted(compacted.segmentFiles(), "the compaction record torn to " + (length - before.length) + " bytes");
+        }
+
+        // The file size reached disk but the record's bytes did not: it reads back as zeros.
+        byte[] zeroTail = after.clone();
+        Arrays.fill(zeroTail, before.length, zeroTail.length, (byte) 0);
+        Files.write(manifest(), zeroTail);
+        assertRefusedTwiceAndNothingDeleted(compacted.segmentFiles(), "the compaction record zero-filled at full length");
+    }
+
+    @Test
+    void replayingTheManifestGivesTheSegmentsLiveInMemory() throws IOException{
+        // A fixed seed keeps the sequence of flushes and compactions the same on every run.
+        Random random = new Random(20261126L);
+        Map<Integer, byte[]> expected = new HashMap<>();
+        LSMTree<Integer> tree = openTree();
+        try{
+            for(int step = 1; step <= 60; step++){
+                List<Segment<Integer>> live = tree.segments();
+                if(live.size() >= 2 && random.nextInt(10) < 4){
+                    // Compact a random subset of at least two live segments, not necessarily adjacent ones.
+                    List<Segment<Integer>> shuffled = new ArrayList<>(live);
+                    Collections.shuffle(shuffled, random);
+                    tree.sharedCompactionLogic(shuffled.subList(0, 2 + random.nextInt(shuffled.size() - 1)));
+                }else{
+                    for(int write = 0; write < 1 + random.nextInt(3); write++){
+                        int key = random.nextInt(20);
+                        byte[] value = value(step * 10 + write);
+                        tree.put(key, value);
+                        expected.put(key, value);
+                    }
+                    tree.flush();
+                }
+
+                final int completedStep = step;
+                assertEquals(dataFileNames(tree), openManifest().readAll(),
+                        () -> "after step " + completedStep + ", replaying the manifest must give exactly the segments live in memory, in order");
+
+                if(step % 15 == 0){
+                    // Reopen mid-sequence, so the replay also runs across the open's snapshot and later appends.
+                    List<String> beforeClose = dataFileNames(tree);
+                    tree.close();
+                    tree = openTree();
+                    assertEquals(beforeClose, dataFileNames(tree),
+                            () -> "after the reopen at step " + completedStep + ", the live segments must be those live before close");
+                }
+            }
+
+            for(Map.Entry<Integer, byte[]> entry: expected.entrySet()){
+                assertArrayEquals(entry.getValue(), tree.get(entry.getKey()), "key " + entry.getKey() + " must keep its latest value");
+            }
+        } finally {
+            tree.close();
         }
     }
 }
