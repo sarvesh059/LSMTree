@@ -3,7 +3,7 @@ package constants;
 import java.util.Arrays;
 
 public enum SegmentAction {
-    CREATED("CREATED"),
+    ADDED("ADDED"),
     DELETED("DELETED");
 
     private final String action;
