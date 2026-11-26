@@ -1,5 +1,6 @@
 package service;
 
+import constants.SegmentAction;
 import core.ManagedFileSupplier;
 import lsmtree.Version;
 import compaction.CompactionStrategy;
@@ -7,6 +8,8 @@ import compaction.MergeStrategy;
 import core.FileUtils;
 import core.Segment;
 import manifest.Manifest;
+import manifest.ManifestPayload;
+import manifest.SegmentChangeLog;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -93,9 +96,9 @@ public class CompactionService<K extends Comparable<K>> {
                 cleanUpService.cleanUp(newSegments);
                 return;
             }
-            Version<K> currentVersion = this.version.get();
-            List<Segment<K>> currentVersionSegmentList = new ArrayList<>(currentVersion.segments());
-            this.manifest.rewrite(currentVersionSegmentList.stream().map(kSegment -> kSegment.getDataFile().getName()).toList());
+            List<SegmentChangeLog> segmentChangeLogs = new ArrayList<>(newSegments.stream().map(kSegment -> new SegmentChangeLog(kSegment.getDataFile().getName(), SegmentAction.ADDED)).toList());
+            segmentChangeLogs.addAll(selectedSegments.stream().map(kSegment -> new SegmentChangeLog(kSegment.getDataFile().getName(), SegmentAction.REMOVED)).toList());
+            this.manifest.append(new ManifestPayload(segmentChangeLogs));
         }
 
         selectedSegments.forEach(Segment::markDeleted);

@@ -38,11 +38,14 @@ public class Manifest {
     }
 
     public void append(String segmentId) throws IOException {
+        SegmentChangeLog segmentChangeLog = new SegmentChangeLog(segmentId, SegmentAction.ADDED);
+        ManifestPayload manifestPayload = new ManifestPayload(List.of(segmentChangeLog));
+        append(manifestPayload);
+    }
+
+    public void append(ManifestPayload manifestPayload) throws IOException{
         try(RandomAccessFile outputStream = new RandomAccessFile(manifestFile, "rw")){
             outputStream.seek(outputStream.length());
-
-            SegmentChangeLog segmentChangeLog = new SegmentChangeLog(segmentId, SegmentAction.ADDED);
-            ManifestPayload manifestPayload = new ManifestPayload(List.of(segmentChangeLog));
 
             byte[] record = encodeRecord(manifestPayload);
             outputStream.write(record);

@@ -33,6 +33,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 public class LSMTreeTest {
     // Each entry below costs 4 (encoded key) + 1 (flag) + 8 (id) + 4 (value length) + 1 (payload) = 18 bytes.
@@ -805,18 +806,21 @@ public class LSMTreeTest {
             assertEquals(2, firstSession.segmentCount(), "two segments to compact");
             dataFileNamesBeforeCompaction = dataFileNames(firstSession);
 
-            makeManifestRewritesFail(dir);
+            makeManifestWritesFail(dir);
+            try {
+                assumeFalse(Files.isWritable(manifestPath(dir)), "running as root: file permissions are not enforced");
 
-            assertThrows(IOException.class,
-                    () -> firstSession.sharedCompactionLogic(firstSession.segments()));
-            assertEquals(1, firstSession.segmentCount(), "the install succeeded in memory");
+                assertThrows(IOException.class,
+                        () -> firstSession.sharedCompactionLogic(firstSession.segments()));
+                assertEquals(1, firstSession.segmentCount(), "the install succeeded in memory");
 
-            assertTrue(firstSession.segments().getFirst().getDataFile().exists(),
-                    "the output is live in memory, so failed-write cleanup must not delete it: "
-                            + "the failure came after the commit point");
+                assertTrue(firstSession.segments().getFirst().getDataFile().exists(),
+                        "the output is live in memory, so failed-write cleanup must not delete it: "
+                                + "the failure came after the commit point");
+            } finally {
+                allowManifestWrites(dir);
+            }
         }
-
-        allowManifestRewrites(dir);
 
         try (LSMTree<Integer> secondSession = new LSMTree<>(codec, dir, SAMPLE_EVERY, THRESHOLD,
                 new FullCompactStrategy<>(1000), new FullLoadMergeStrategy<>(codec))) {
@@ -830,16 +834,16 @@ public class LSMTreeTest {
         }
     }
 
-    private void makeManifestRewritesFail(Path dir) throws IOException {
-        Files.createDirectory(manifestRewriteTempPath(dir));
+    private void makeManifestWritesFail(Path dir) {
+        assertTrue(manifestPath(dir).toFile().setWritable(false), "precondition: could not make the manifest read-only");
     }
 
-    private void allowManifestRewrites(Path dir) throws IOException {
-        Files.delete(manifestRewriteTempPath(dir));
+    private void allowManifestWrites(Path dir) {
+        manifestPath(dir).toFile().setWritable(true);
     }
 
-    private Path manifestRewriteTempPath(Path dir) {
-        return dir.resolve(FileConstants.MANIFEST_FILE_NAME + ".tmp");
+    private Path manifestPath(Path dir) {
+        return dir.resolve(FileConstants.MANIFEST_FILE_NAME);
     }
 
     private List<String> dataFileNames(LSMTree<Integer> tree) {
