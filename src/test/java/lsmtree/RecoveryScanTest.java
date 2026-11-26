@@ -518,4 +518,48 @@ public class RecoveryScanTest {
         assertEquals(List.of(lastBefore + 1, lastBefore + 2), numbersAfter,
                 "the snapshot takes the next number after the old file's last, and the flush the one after that");
     }
+
+    @Test
+    void aCompactionAppendsExactlyOneRecordAndKeepsTheOldBytes() throws IOException{
+        try(LSMTree<Integer> tree = openTree()){
+            tree.put(1, value(1));
+            tree.flush();
+            tree.put(2, value(2));
+            tree.flush();
+            byte[] before = Files.readAllBytes(manifest());
+
+            tree.sharedCompactionLogic(tree.segments());
+            byte[] after = Files.readAllBytes(manifest());
+
+            assertArrayEquals(before, Arrays.copyOf(after, before.length),
+                    "a compaction must append, leaving every byte already written untouched");
+            assertEquals(recordStarts(before).size() + 1, recordStarts(after).size(),
+                    "one logical change is one record, however many segments it removes and adds");
+            assertEquals(tree.segments().stream().map(segment -> segment.getDataFile().getName()).toList(),
+                    openManifest().readAll(),
+                    "replaying the manifest must give exactly the segments live in memory");
+        }
+    }
+
+    @Test
+    void aCompactedStoreReopensWithTheMergedSegmentOnly() throws IOException{
+        // A holds 1 and an old 2; B holds the newer 2. After compacting A and B, only the merged output is live.
+        try(LSMTree<Integer> tree = openTree()){
+            tree.put(1, value(10));
+            tree.put(2, value(20));
+            tree.flush();
+            tree.put(2, value(21));
+            tree.flush();
+            assertEquals(2, tree.segmentCount(), "precondition: two segments to compact");
+
+            tree.sharedCompactionLogic(tree.segments());
+            assertEquals(1, tree.segmentCount(), "precondition: the compaction merged them into one");
+        }
+
+        try(LSMTree<Integer> tree = openTree()){
+            assertEquals(1, tree.segmentCount(), "reopen must not bring back the compacted inputs");
+            assertArrayEquals(value(10), tree.get(1));
+            assertArrayEquals(value(21), tree.get(2), "the newer value must win after reopen");
+        }
+    }
 }
