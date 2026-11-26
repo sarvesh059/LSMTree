@@ -13,6 +13,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import sstable.SSTable;
 
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
@@ -213,6 +215,36 @@ public class RecoveryScanTest {
 
     private static List<String> dataFileNames(LSMTree<Integer> tree){
         return tree.segments().stream().map(segment -> segment.getDataFile().getName()).toList();
+    }
+
+    // One payload entry as ManifestPayload writes it: [name len 4][name][action len 4][action].
+    private static void writeEntry(DataOutputStream out, String segmentName, String action) throws IOException{
+        byte[] name = segmentName.getBytes(StandardCharsets.UTF_8);
+        out.writeInt(name.length);
+        out.write(name);
+        byte[] actionBytes = action.getBytes(StandardCharsets.UTF_8);
+        out.writeInt(actionBytes.length);
+        out.write(actionBytes);
+    }
+
+    // Replaces the payload of the manifest's last record, keeping its sequence number and recomputing its
+    // length and CRC, so the record is intact as far as the frame can tell and only the payload is wrong.
+    private static byte[] withLastPayload(byte[] manifestBytes, byte[] payload){
+        int lastStart = recordStarts(manifestBytes).getLast();
+        ByteBuffer record = ByteBuffer.allocate(RECORD_HEADER_SIZE + payload.length);
+        record.put(Arrays.copyOfRange(manifestBytes, lastStart, lastStart + RECORD_CRC_OFFSET));
+        record.putInt(0);
+        record.putLong(sequenceAt(manifestBytes, lastStart));
+        record.putInt(payload.length);
+        record.put(payload);
+        byte[] recordBytes = record.array();
+        CRC32C crc = new CRC32C();
+        crc.update(recordBytes, RECORD_SEQUENCE_OFFSET, recordBytes.length - RECORD_SEQUENCE_OFFSET);
+        ByteBuffer.wrap(recordBytes).putInt(RECORD_CRC_OFFSET, (int) crc.getValue());
+
+        byte[] result = Arrays.copyOf(manifestBytes, lastStart + recordBytes.length);
+        System.arraycopy(recordBytes, 0, result, lastStart, recordBytes.length);
+        return result;
     }
 
     @Test
@@ -692,6 +724,50 @@ public class RecoveryScanTest {
             }
         } finally {
             tree.close();
+        }
+    }
+
+    @Test
+    void anIntactRecordWhosePayloadDoesNotDecodeRefusesToOpen() throws IOException{
+        List<Path> segmentFiles = flushOneSegment(1);
+        String liveName = segmentFiles.getFirst().getFileName().toString();
+        byte[] intact = Files.readAllBytes(manifest());
+
+        // Each payload names a segment whose files exist, so accepting it by mistake would let the open succeed.
+        Map<String, byte[]> undecodable = new LinkedHashMap<>();
+
+        ByteArrayOutputStream trailing = new ByteArrayOutputStream();
+        DataOutputStream trailingOut = new DataOutputStream(trailing);
+        trailingOut.writeInt(1);
+        writeEntry(trailingOut, liveName, "ADDED");
+        trailingOut.writeInt(7);
+        undecodable.put("bytes left over after the last entry", trailing.toByteArray());
+
+        ByteArrayOutputStream unknownAction = new ByteArrayOutputStream();
+        DataOutputStream unknownActionOut = new DataOutputStream(unknownAction);
+        unknownActionOut.writeInt(1);
+        writeEntry(unknownActionOut, liveName, "MOVED");
+        undecodable.put("an action no constant declares", unknownAction.toByteArray());
+
+        ByteArrayOutputStream shortCount = new ByteArrayOutputStream();
+        DataOutputStream shortCountOut = new DataOutputStream(shortCount);
+        shortCountOut.writeInt(2);
+        writeEntry(shortCountOut, liveName, "ADDED");
+        undecodable.put("a count promising more entries than follow", shortCount.toByteArray());
+
+        for(Map.Entry<String, byte[]> payload: undecodable.entrySet()){
+            byte[] damaged = withLastPayload(intact, payload.getValue());
+            Files.write(manifest(), damaged);
+            for(int open = 1; open <= 2; open++){
+                final int attempt = open;
+                // Any exception counts: the rule is that such a record refuses the open, not which type says so.
+                assertThrows(Exception.class, this::openTree,
+                        () -> payload.getKey() + ": the open must be refused (open " + attempt + ")");
+                assertAll(
+                        () -> assertAllExist(segmentFiles, payload.getKey() + ": a refused open must not delete any segment (open " + attempt + ")"),
+                        () -> assertArrayEquals(damaged, Files.readAllBytes(manifest()), payload.getKey() + ": a refused open must leave the manifest byte-identical (open " + attempt + ")")
+                );
+            }
         }
     }
 }

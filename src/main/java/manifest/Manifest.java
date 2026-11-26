@@ -31,6 +31,7 @@ public class Manifest {
     private static final int CRC_COVERED_FROM = SEQUENCE_OFFSET;
     private final File manifestFile;
     private final AtomicLong sequenceNumber;
+    private static final System.Logger LOG = System.getLogger(Manifest.class.getName());
 
     private Manifest(File manifestFile, long sequenceNumber){
         this.manifestFile = manifestFile;
@@ -62,7 +63,9 @@ public class Manifest {
                 if(segmentChangeLog.segmentAction().equals(SegmentAction.ADDED)){
                     segmentSet.add(segmentChangeLog.segmentId());
                 }else if(segmentChangeLog.segmentAction().equals(SegmentAction.REMOVED)){
-                    segmentSet.remove(segmentChangeLog.segmentId());
+                    if(!segmentSet.remove(segmentChangeLog.segmentId())){
+                        LOG.log(System.Logger.Level.WARNING, "Skipping "+segmentChangeLog.segmentId()+" as the segment is not live");
+                    }
                 }
             }
         }
