@@ -15,6 +15,7 @@ import sstable.SSTable;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -22,6 +23,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
+import java.util.zip.CRC32C;
 
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -38,6 +40,10 @@ import static org.mockito.Mockito.spy;
 public class RecoveryScanTest {
     private static final int SAMPLE_EVERY = 5;
     private static final int NEVER_FLUSHES = 1_000_000;
+    private static final int RECORD_CRC_OFFSET = 8;
+    private static final int RECORD_SEQUENCE_OFFSET = 12;
+    private static final int RECORD_LENGTH_OFFSET = 20;
+    private static final int RECORD_HEADER_SIZE = 24;
 
     @TempDir
     Path dir;
@@ -132,6 +138,41 @@ public class RecoveryScanTest {
 
     private static void assertNoneExist(List<Path> paths, String message){
         for(Path path: paths) assertFalse(Files.exists(path), () -> message + ": still present "+ path.getFileName());
+    }
+
+    private static List<Integer> recordStarts(byte[] manifestBytes){
+        List<Integer> starts = new ArrayList<>();
+        int position = FileConstants.MANIFEST_FILE_START_LINE.getBytes(StandardCharsets.UTF_8).length;
+        while(position < manifestBytes.length){
+            starts.add(position);
+            position += RECORD_HEADER_SIZE + ByteBuffer.wrap(manifestBytes).getInt(position + RECORD_LENGTH_OFFSET);
+        }
+        return starts;
+    }
+
+    private static long sequenceAt(byte[] manifestBytes, int recordStart){
+        return ByteBuffer.wrap(manifestBytes).getLong(recordStart + RECORD_SEQUENCE_OFFSET);
+    }
+
+    // Renumbers one record and recomputes its CRC, so the record is intact and only its number is wrong.
+    private static void renumber(byte[] manifestBytes, int recordStart, long sequenceNumber){
+        int recordEnd = recordStart + RECORD_HEADER_SIZE + ByteBuffer.wrap(manifestBytes).getInt(recordStart + RECORD_LENGTH_OFFSET);
+        ByteBuffer.wrap(manifestBytes).putLong(recordStart + RECORD_SEQUENCE_OFFSET, sequenceNumber);
+        CRC32C crc = new CRC32C();
+        crc.update(manifestBytes, recordStart + RECORD_SEQUENCE_OFFSET, recordEnd - (recordStart + RECORD_SEQUENCE_OFFSET));
+        ByteBuffer.wrap(manifestBytes).putInt(recordStart + RECORD_CRC_OFFSET, (int) crc.getValue());
+    }
+
+    private List<Path> flushThreeSegments() throws IOException{
+        List<Path> segmentFiles = new ArrayList<>();
+        try(LSMTree<Integer> tree = openTree()){
+            for(int key = 1; key <= 3; key++){
+                tree.put(key, value(key));
+                tree.flush();
+            }
+            tree.segments().forEach(segment -> segmentFiles.addAll(filesOf(segment)));
+        }
+        return segmentFiles;
     }
 
     @Test
@@ -426,5 +467,55 @@ public class RecoveryScanTest {
         lastByteFlipped[lastByteFlipped.length - 1] ^= 0x01;
         Files.write(manifest(), lastByteFlipped);
         assertRefusedTwiceAndNothingDeleted(segmentFiles, "a bit flip in the last record");
+    }
+
+    @Test
+    void aGapInTheSequenceNumbersRefusesToOpen() throws IOException{
+        List<Path> segmentFiles = flushThreeSegments();
+        byte[] manifestBytes = Files.readAllBytes(manifest());
+        List<Integer> starts = recordStarts(manifestBytes);
+        assertEquals(4, starts.size(), "precondition: the open's snapshot plus one record per flush");
+
+        // Shift the middle record and every record after it up by one: the only fault is the skipped number.
+        for(int i = 2; i < starts.size(); i++){
+            renumber(manifestBytes, starts.get(i), sequenceAt(manifestBytes, starts.get(i)) + 1);
+        }
+        Files.write(manifest(), manifestBytes);
+
+        assertRefusedTwiceAndNothingDeleted(segmentFiles, "intact records from the middle on, numbered one too high");
+    }
+
+    @Test
+    void aSequenceNumberThatDoesNotIncreaseRefusesToOpen() throws IOException{
+        List<Path> segmentFiles = flushThreeSegments();
+        byte[] manifestBytes = Files.readAllBytes(manifest());
+        List<Integer> starts = recordStarts(manifestBytes);
+        assertEquals(4, starts.size(), "precondition: the open's snapshot plus one record per flush");
+
+        // Shift the middle record and every record after it down by one: the only fault is the repeated number.
+        for(int i = 2; i < starts.size(); i++){
+            renumber(manifestBytes, starts.get(i), sequenceAt(manifestBytes, starts.get(i)) - 1);
+        }
+        Files.write(manifest(), manifestBytes);
+
+        assertRefusedTwiceAndNothingDeleted(segmentFiles, "intact records from the middle on, numbered one too low");
+    }
+
+    @Test
+    void sequenceNumbersContinueAcrossTheSnapshotAtOpen() throws IOException{
+        flushThreeSegments();
+        byte[] before = Files.readAllBytes(manifest());
+        List<Integer> startsBefore = recordStarts(before);
+        long lastBefore = sequenceAt(before, startsBefore.getLast());
+
+        try(LSMTree<Integer> tree = openTree()){
+            tree.put(4, value(4));
+            tree.flush();
+        }
+
+        byte[] after = Files.readAllBytes(manifest());
+        List<Long> numbersAfter = recordStarts(after).stream().map(start -> sequenceAt(after, start)).toList();
+        assertEquals(List.of(lastBefore + 1, lastBefore + 2), numbersAfter,
+                "the snapshot takes the next number after the old file's last, and the flush the one after that");
     }
 }
